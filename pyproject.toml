@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "os-guard-agent"
+dynamic = ["version"]
+description = "Unix agent for OS Guard"
+requires-python = ">=3.9"
+dependencies = [
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.scripts]
+os-guard-agent = "os_guard_agent.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "os_guard_agent.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

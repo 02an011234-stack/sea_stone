@@ -1,0 +1,481 @@
+{
+  "schema_version": "1.0",
+  "manifest_id": "manifest-unix-67-v1",
+  "module_version": "unix-2026.1",
+  "platform": "unix",
+  "supported_os": {
+    "rocky": ["9", "10"],
+    "ubuntu": ["22", "24"]
+  },
+  "items": [
+    {
+      "item_id": "U-01",
+      "module": "unix/U-01.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-02",
+      "module": "unix/U-02.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-03",
+      "module": "unix/U-03.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-04",
+      "module": "unix/U-04.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-05",
+      "module": "unix/U-05.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-06",
+      "module": "unix/U-06.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-07",
+      "module": "unix/U-07.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-08",
+      "module": "unix/U-08.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-09",
+      "module": "unix/U-09.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-10",
+      "module": "unix/U-10.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-11",
+      "module": "unix/U-11.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-12",
+      "module": "unix/U-12.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-13",
+      "module": "unix/U-13.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-14",
+      "module": "unix/U-14.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-15",
+      "module": "unix/U-15.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-16",
+      "module": "unix/U-16.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-17",
+      "module": "unix/U-17.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-18",
+      "module": "unix/U-18.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-19",
+      "module": "unix/U-19.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-20",
+      "module": "unix/U-20.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-21",
+      "module": "unix/U-21.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-22",
+      "module": "unix/U-22.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-23",
+      "module": "unix/U-23.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-24",
+      "module": "unix/U-24.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-25",
+      "module": "unix/U-25.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-26",
+      "module": "unix/U-26.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-27",
+      "module": "unix/U-27.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-28",
+      "module": "unix/U-28.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-29",
+      "module": "unix/U-29.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-30",
+      "module": "unix/U-30.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-31",
+      "module": "unix/U-31.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-32",
+      "module": "unix/U-32.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-33",
+      "module": "unix/U-33.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-34",
+      "module": "unix/U-34.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-35",
+      "module": "unix/U-35.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-36",
+      "module": "unix/U-36.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-37",
+      "module": "unix/U-37.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-38",
+      "module": "unix/U-38.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-39",
+      "module": "unix/U-39.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-40",
+      "module": "unix/U-40.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-41",
+      "module": "unix/U-41.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-42",
+      "module": "unix/U-42.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-43",
+      "module": "unix/U-43.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-44",
+      "module": "unix/U-44.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-45",
+      "module": "unix/U-45.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-46",
+      "module": "unix/U-46.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-47",
+      "module": "unix/U-47.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-48",
+      "module": "unix/U-48.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-49",
+      "module": "unix/U-49.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-50",
+      "module": "unix/U-50.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-51",
+      "module": "unix/U-51.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-52",
+      "module": "unix/U-52.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-53",
+      "module": "unix/U-53.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-54",
+      "module": "unix/U-54.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-55",
+      "module": "unix/U-55.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-56",
+      "module": "unix/U-56.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-57",
+      "module": "unix/U-57.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-58",
+      "module": "unix/U-58.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-59",
+      "module": "unix/U-59.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-60",
+      "module": "unix/U-60.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-61",
+      "module": "unix/U-61.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-62",
+      "module": "unix/U-62.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-63",
+      "module": "unix/U-63.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-64",
+      "module": "unix/U-64.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-65",
+      "module": "unix/U-65.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-66",
+      "module": "unix/U-66.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    },
+    {
+      "item_id": "U-67",
+      "module": "unix/U-67.sh",
+      "implemented": true,
+      "actions": ["CHECK"],
+      "supported_os": {"rocky": ["9", "10"], "ubuntu": ["22", "24"]}
+    }
+  ]
+}

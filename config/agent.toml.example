@@ -1,0 +1,14 @@
+[agent]
+central_server_url = "https://os-guard.example.com/agent-api/v2"
+
+# Leave empty until enrollment assigns an Agent ID.
+agent_id = ""
+
+log_path = "/var/log/os-guard-agent/agent.log"
+log_level = "INFO"
+token_store_path = "/var/lib/os-guard-agent/credentials.json"
+request_timeout_seconds = 10
+heartbeat_interval_seconds = 30
+task_claim_interval_seconds = 10
+inventory_version = "unavailable"
+manifest_path = "/opt/os-guard-agent/modules/manifest.json"

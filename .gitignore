@@ -1,0 +1,69 @@
+# Python bytecode and test/tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Virtual environments and build artifacts
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Local configuration, runtime credentials, and secrets
+.env
+.env.*
+!.env.example
+config/agent.toml
+config/*.local.toml
+credentials/
+credentials.json
+agent-credentials.json
+token.json
+tokens.json
+*.credential
+*.credentials
+*.token
+
+# Private keys and runtime certificates
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+
+# Logs and runtime state
+*.log
+logs/
+run/
+*.pid
+*.sock
+
+# Temporary and editor files
+.tmp/
+tmp/
+.tmp_pypdf/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
