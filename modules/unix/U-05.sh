@@ -28,6 +28,17 @@ review_reason=''
 collection_error=''
 error_json='null'
 
+is_nonnegative_integer() {
+    case "${1-}" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+is_root_uid_value() {
+    [ "${1-}" = '-1' ] || is_nonnegative_integer "${1-}"
+}
+
 [ -e "$passwd_path" ] && passwd_present=true
 [ -r "$passwd_path" ] && passwd_readable=true
 
@@ -62,7 +73,13 @@ if [ -z "$collection_error" ]; then
         END { print valid, uid0, nonroot0, root_entries, root_uid, malformed }
     ' "$passwd_path" 2>/dev/null); then
         set -- $counts
-        if [ "$#" -eq 6 ]; then
+        if [ "$#" -eq 6 ] &&
+            is_nonnegative_integer "$1" &&
+            is_nonnegative_integer "$2" &&
+            is_nonnegative_integer "$3" &&
+            is_nonnegative_integer "$4" &&
+            is_root_uid_value "$5" &&
+            is_nonnegative_integer "$6"; then
             valid_entry_count=$1
             uid_zero_count=$2
             non_root_uid0_count=$3
@@ -75,6 +92,17 @@ if [ -z "$collection_error" ]; then
     else
         collection_error='PASSWD_FILE_READ_ERROR'
     fi
+fi
+
+if [ -z "$collection_error" ] && ! {
+    is_nonnegative_integer "$valid_entry_count" &&
+    is_nonnegative_integer "$uid_zero_count" &&
+    is_nonnegative_integer "$non_root_uid0_count" &&
+    is_nonnegative_integer "$root_entry_count" &&
+    is_root_uid_value "$root_uid" &&
+    is_nonnegative_integer "$malformed_entry_count"
+}; then
+    collection_error='PASSWD_FILE_PARSE_ERROR'
 fi
 
 if [ -z "$collection_error" ] && { [ "$valid_entry_count" -eq 0 ] || [ "$malformed_entry_count" -gt 0 ]; }; then
@@ -101,8 +129,12 @@ else
     review_reason='ROOT_ACCOUNT_STRUCTURE_NONSTANDARD'
 fi
 
-if [ "$root_uid" -ge 0 ]; then root_uid_json=$root_uid; else root_uid_json='null'; fi
-if [ "$non_root_uid0_count" -gt 0 ]; then non_root_uid0_exists=true; else non_root_uid0_exists=false; fi
+if is_nonnegative_integer "$root_uid"; then root_uid_json=$root_uid; else root_uid_json='null'; fi
+if is_nonnegative_integer "$non_root_uid0_count" && [ "$non_root_uid0_count" -gt 0 ]; then
+    non_root_uid0_exists=true
+else
+    non_root_uid0_exists=false
+fi
 
 printf '{"item_id":"U-05","status":%s,"review_state":"%s",' "$status_json" "$review_state"
 printf '"current_value":{"passwd_file_present":%s,"passwd_file_readable":%s,' "$passwd_present" "$passwd_readable"

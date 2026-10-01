@@ -139,6 +139,25 @@ class U05Tests(unittest.TestCase):
         self.assertEqual(actual["status"], "UNCHECKABLE")
         self.assertEqual(actual["current_value"]["malformed_entry_count"], 1)
 
+    def test_missing_os_context_with_uncollected_root_uid_is_cleanly_uncheckable(self):
+        actual, output = self.run_real(
+            "root:x:0:0:root:/root:/bin/sh\n", distro="", version="22.04"
+        )
+        self.assertEqual(actual["status"], "UNCHECKABLE")
+        self.assertEqual(actual["error"]["code"], "UNSUPPORTED_OS_CONFIGURATION")
+        self.assertIsNone(actual["current_value"]["root_uid"])
+        self.assertEqual(actual["current_value"]["non_root_uid0_count"], 0)
+        self.assertNotIn("integer expression expected", output)
+
+    def test_empty_root_uid_field_is_uncheckable_without_integer_error(self):
+        actual, output = self.run_real(
+            "root:x::0:root:/root:/bin/sh\n", distro="ubuntu", version="22.04"
+        )
+        self.assertEqual(actual["status"], "UNCHECKABLE")
+        self.assertEqual(actual["error"]["code"], "PASSWD_FILE_PARSE_ERROR")
+        self.assertIsNone(actual["current_value"]["root_uid"])
+        self.assertNotIn("integer expression expected", output)
+
     def test_uid_zero_aggregate_evidence(self):
         result, _ = self.execute(payload(
             status="VULNERABLE", uid0=3, nonroot0=2,
