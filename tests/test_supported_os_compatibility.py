@@ -128,7 +128,7 @@ COMMON_ITEM_PATHS = {
     "U-61": ("/etc/snmp/snmpd.conf", "rocommunity", "com2sec", "rouser"),
     "U-62": ("/etc/issue", "/etc/issue.net", "ftpd_banner", "smtpd_banner", "version"),
     "U-63": ("/etc/sudoers", "stat", "0640"),
-    "U-64": ("--cacheonly", "--security", "--no-download", "/var/log/dnf.log", "/var/log/apt/history.log"),
+    "U-64": ("--cacheonly", "--security", "$a -s upgrade", "/var/log/dnf.log", "/var/log/apt/history.log"),
     "U-65": ("chronyd.service", "ntpd.service", "systemd-timesyncd.service", "chronyc", "ntpq", "timedatectl"),
     "U-66": ("rsyslog.service", "systemd-journald.service", "/etc/rsyslog.conf", "/etc/systemd/journald.conf", "/var/log"),
     "U-67": ("/var/log", "find", "-type f", "%U|%u|%m", "0644"),
