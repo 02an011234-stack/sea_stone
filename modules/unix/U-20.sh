@@ -15,7 +15,7 @@ status_json='null'
 review_state='PENDING'
 error_json='null'
 reason_code='KISA_U20_ANALYSIS_PENDING'
-judgment_basis='Applicable inetd, xinetd, and systemd configuration metadata has not been evaluated'
+judgment_basis='Applicable inetd and xinetd configuration metadata has not been evaluated'
 
 detected_service_model='unknown'
 inetd_present=false
@@ -54,7 +54,7 @@ inspect_metadata() {
     metadata_owner=$2
     metadata_mode=$3
     if ! printf '%s|%s|%s\n' "$metadata_uid" "$metadata_owner" "$metadata_mode" | awk -F'|' '
-        NF == 3 && $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[0-7][0-7][0-7]([0-7])?$/ { valid=1 }
+        NF == 3 && $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[0-7]+$/ && length($3) <= 4 { valid=1 }
         END { exit valid ? 0 : 1 }
     ' >/dev/null 2>&1; then
         scan_completed=false
@@ -99,8 +99,7 @@ inspect_regular_file() {
 target_is_in_scope() {
     target_path=$1
     case "$target_path" in
-        "${test_root}/etc/inetd.conf"|"${test_root}/etc/xinetd.conf"|"${test_root}/etc/xinetd.d"/*|\
-        "${test_root}/etc/systemd"/*.conf|"${test_root}/etc/systemd"/*.conf.d/*) return 0 ;;
+        "${test_root}/etc/inetd.conf"|"${test_root}/etc/xinetd.conf"|"${test_root}/etc/xinetd.d"/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -141,20 +140,6 @@ scan_config_directory() {
     done
 }
 
-scan_systemd_scope() {
-    systemd_dir="${test_root}/etc/systemd"
-    if [ ! -r "$systemd_dir" ] || [ ! -x "$systemd_dir" ]; then
-        scan_completed=false; scan_error_count=$((scan_error_count + 1)); return
-    fi
-    for entry in "$systemd_dir"/*.conf; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        inspect_path "$entry"
-    done
-    for conf_dir in "$systemd_dir"/*.conf.d; do
-        [ -d "$conf_dir" ] && scan_config_directory "$conf_dir"
-    done
-}
-
 process_fixture_scan() {
     fixture_file=$1
     if [ ! -r "$fixture_file" ]; then
@@ -190,8 +175,10 @@ if [ -z "$collection_error" ]; then
             inetd) inetd_present=true ;;
             xinetd) xinetd_present=true ;;
             systemd) systemd_present=true ;;
+            systemd_with_legacy) systemd_present=true; inetd_present=true ;;
+            unknown) ;;
             *inetd*xinetd*|*xinetd*inetd*) inetd_present=true; xinetd_present=true ;;
-            *) systemd_present=true ;;
+            *) detected_service_model=unknown ;;
         esac
         process_fixture_scan "$OS_GUARD_TEST_SCAN_FILE"
     else
@@ -204,9 +191,9 @@ if [ -z "$collection_error" ]; then
         if [ -d "${test_root}/etc/xinetd.d" ]; then
             xinetd_present=true; scan_config_directory "${test_root}/etc/xinetd.d"
         fi
-        if [ -d "${test_root}/etc/systemd" ]; then
-            systemd_present=true; scan_systemd_scope
-        fi
+        for systemd_dir in "${test_root}/run/systemd/system" "${test_root}/etc/systemd/system" "${test_root}/usr/lib/systemd/system" "${test_root}/lib/systemd/system"; do
+            if [ -d "$systemd_dir" ]; then systemd_present=true; break; fi
+        done
         if [ "$systemd_present" = true ]; then
             if [ "$inetd_present" = true ] || [ "$xinetd_present" = true ]; then detected_service_model='systemd_with_legacy'; else detected_service_model='systemd'; fi
         elif [ "$xinetd_present" = true ] && [ "$inetd_present" = true ]; then detected_service_model='inetd_and_xinetd'
@@ -227,10 +214,14 @@ elif [ "$scan_completed" != true ]; then
     judgment_basis='The applicable configuration scope or required metadata could not be collected completely'
     error_code=${collection_error:-CONFIGURATION_SCAN_INCOMPLETE}
     error_json=$(printf '{"code":'; os_guard_json_quote "$error_code"; printf ',"message":"configuration metadata collection failed"}')
+elif [ "$checked_file_count" -eq 0 ] && [ "$detected_service_model" = 'systemd' ]; then
+    status_json='"N/A"'; review_state='NOT_REQUIRED'
+    reason_code='KISA_U20_NOT_APPLICABLE_SYSTEMD_ONLY'
+    judgment_basis='No inetd or xinetd configuration target exists and the local service model is explicitly identified as systemd-only'
 elif [ "$checked_file_count" -eq 0 ]; then
     status_json='"UNCHECKABLE"'; review_state='NOT_REQUIRED'
     reason_code='KISA_U20_NO_APPLICABLE_FILES'
-    judgment_basis='No applicable inetd, xinetd, or systemd configuration file was available for assessment'
+    judgment_basis='No applicable inetd or xinetd configuration file and no conclusive systemd-only model was available for assessment'
     error_json='{"code":"NO_APPLICABLE_CONFIGURATION_FOUND","message":"no assessable U-20 configuration file was found"}'
 elif [ "$review_required" = true ]; then
     status_json='null'; review_state='PENDING'
@@ -248,8 +239,8 @@ printf ',"inetd_present":%s,"xinetd_present":%s,"systemd_present":%s,' "$inetd_p
 printf '"applicable_file_count":%s,"checked_file_count":%s,"root_owned_count":%s,' "$applicable_file_count" "$checked_file_count" "$root_owned_count"
 printf '"non_root_owned_count":%s,"compliant_permission_count":%s,"noncompliant_permission_count":%s,' "$non_root_owned_count" "$compliant_permission_count" "$noncompliant_permission_count"
 printf '"symlink_count":%s,"unresolved_count":%s,"scan_completed":%s},' "$symlink_count" "$unresolved_count" "$scan_completed"
-printf '"evidence":{"item_id":"U-20","inspection_target":"inetd, xinetd, and bounded systemd configuration files",'
-printf '"collection_method":"Read-only bounded discovery and structured stat metadata without reading configuration contents",'
+printf '"evidence":{"item_id":"U-20","inspection_target":"inetd and xinetd configuration file metadata",'
+printf '"collection_method":"Read-only KISA-scoped discovery and structured stat metadata without reading configuration contents",'
 printf '"detected_service_model":'; os_guard_json_quote "$detected_service_model"
 printf ',"inetd_present":%s,"xinetd_present":%s,"systemd_present":%s,' "$inetd_present" "$xinetd_present" "$systemd_present"
 printf '"applicable_file_count":%s,"checked_file_count":%s,"root_owned_count":%s,' "$applicable_file_count" "$checked_file_count" "$root_owned_count"

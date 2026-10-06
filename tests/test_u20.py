@@ -101,7 +101,7 @@ class U20Tests(unittest.TestCase):
     def test_02_root_0600_is_good(self): self.assert_good("600")
     def test_03_root_0400_is_good(self): self.assert_good("400")
     def test_04_root_0200_is_good(self): self.assert_good("200")
-    def test_05_root_0000_is_good(self): self.assert_good("000")
+    def test_05_root_0000_is_good(self): self.assert_good("0")
 
     def test_06_non_root_owner_is_vulnerable(self):
         result, _ = self.run_real(["regular|1000|user|600"])
@@ -144,15 +144,40 @@ class U20Tests(unittest.TestCase):
         self.assertEqual(result["current_value"]["applicable_file_count"], 2)
 
     def test_20_systemd_structure(self):
-        result, _ = self.run_real(["regular|0|root|600"], model="systemd")
-        self.assertEqual(result["status"], "GOOD")
+        result, _ = self.run_real([], model="systemd")
+        self.assertEqual(result["status"], "N/A")
         self.assertTrue(result["current_value"]["systemd_present"])
 
-    def test_21_inetd_and_xinetd_absent_systemd_is_assessable(self):
-        result, _ = self.run_real(["regular|0|root|600"], model="systemd")
-        self.assertEqual(result["status"], "GOOD")
+    def test_21_rocky_10_systemd_only_is_not_applicable(self):
+        result, _ = self.run_real([], model="systemd", distro="rocky", version="10.2")
+        self.assertEqual(result["status"], "N/A")
+        self.assertEqual(result["review_state"], "NOT_REQUIRED")
+        self.assertEqual(result["evidence"]["reason_code"], "KISA_U20_NOT_APPLICABLE_SYSTEMD_ONLY")
         self.assertFalse(result["current_value"]["inetd_present"])
         self.assertFalse(result["current_value"]["xinetd_present"])
+
+    def test_21b_rocky_10_systemd_only_runtime_discovery(self):
+        executable = shell_path()
+        if not executable:
+            self.skipTest("POSIX shell is unavailable")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "usr/lib/systemd/system").mkdir(parents=True)
+            env = {
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
+                "OS_GUARD_DISTRO": "rocky", "OS_GUARD_VERSION_ID": "10.2",
+                "OS_GUARD_MODULE_VERSION": MODULE_VERSION,
+                "OS_GUARD_TEST_ROOT": str(root),
+            }
+            completed = subprocess.run(
+                [executable, str(MODULE)], env=env, capture_output=True,
+                text=True, timeout=5, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result["status"], "N/A")
+            self.assertEqual(result["current_value"]["detected_service_model"], "systemd")
+            self.assertEqual(result["current_value"]["applicable_file_count"], 0)
 
     def test_22_normal_symlink_uses_target_metadata(self):
         result, _ = self.run_real(["symlink|0|root|600"])
@@ -187,7 +212,7 @@ class U20Tests(unittest.TestCase):
         self.assertEqual(result["status"], "UNCHECKABLE")
 
     def test_29_empty_scan_is_uncheckable(self):
-        result, _ = self.run_real([])
+        result, _ = self.run_real([], model="unknown")
         self.assertEqual(result["status"], "UNCHECKABLE")
         self.assertEqual(result["error"]["code"], "NO_APPLICABLE_CONFIGURATION_FOUND")
 
@@ -232,16 +257,15 @@ class U20Tests(unittest.TestCase):
         source = MODULE.read_text(encoding="utf-8")
         self.assertNotRegex(source, r"(?m)^\s*(chmod|chown|chgrp|rm|mv|touch|systemctl|service|apt|dnf|yum)\b")
         self.assertNotIn("sed -i", source)
-        self.assertNotIn('scan_config_directory "$systemd_dir"', source)
-        self.assertIn('"$systemd_dir"/*.conf', source)
-        self.assertIn('"$systemd_dir"/*.conf.d', source)
+        self.assertNotIn('"${test_root}/etc/systemd"/*.conf', source)
+        self.assertIn('"${test_root}/etc/xinetd.d"', source)
 
     def test_37_unsupported_os_is_uncheckable(self):
         result, _ = self.run_real(["regular|0|root|600"], distro="debian", version="12")
         self.assertEqual(result["status"], "UNCHECKABLE")
         self.assertEqual(result["error"]["code"], "UNSUPPORTED_OS_CONFIGURATION")
 
-    def test_38_runner_contract_timeout_and_no_na(self):
+    def test_38_runner_contract_timeout(self):
         runner = self.runner(); planned = runner.prepare_item("U-20", Action.CHECK)
         completed = subprocess.CompletedProcess([str(MODULE)], 0, payload(), "")
         with patch("os_guard_agent.module_runner.os.access", return_value=True), patch(
@@ -251,7 +275,6 @@ class U20Tests(unittest.TestCase):
         self.assertEqual(parsed.status, ResultStatus.GOOD)
         self.assertEqual(parsed.review_state, ReviewState.NOT_REQUIRED)
         self.assertFalse(run.call_args.kwargs["shell"])
-        self.assertNotEqual(parsed.status.value, "N/A")
         with patch("os_guard_agent.module_runner.os.access", return_value=True), patch(
             "os_guard_agent.module_runner.subprocess.run", side_effect=subprocess.TimeoutExpired("U-20", 1),
         ):

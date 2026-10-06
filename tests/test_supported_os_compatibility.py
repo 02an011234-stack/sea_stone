@@ -130,7 +130,7 @@ COMMON_ITEM_PATHS = {
     "U-63": ("/etc/sudoers", "stat", "0640"),
     "U-64": ("--cacheonly", "--security", "$a -s upgrade", "/var/log/dnf.log", "/var/log/apt/history.log"),
     "U-65": ("chronyd.service", "ntpd.service", "systemd-timesyncd.service", "chronyc", "ntpq", "timedatectl"),
-    "U-66": ("rsyslog.service", "systemd-journald.service", "/etc/rsyslog.conf", "/etc/systemd/journald.conf", "/var/log"),
+    "U-66": ("rsyslog.service", "systemd-journald.service", "/etc/rsyslog.conf", "/etc/systemd/journald.conf", "/usr/lib/systemd/journald.conf", "systemd-analyze", "cat-config", "/var/log"),
     "U-67": ("/var/log", "find", "-type f", "%U|%u|%m", "0644"),
 }
 
