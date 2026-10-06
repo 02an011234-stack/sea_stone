@@ -128,9 +128,11 @@ printf '%s\\n' "${OS_GUARD_TEST_STAT_OUTPUT}"
         self.assertEqual(result["status"], "GOOD")
         self.assertTrue(result["current_value"]["permission_within_0400"])
 
-    def test_03_root_0000_is_good(self):
-        result, _ = self.run_real("0|root|000")
+    def test_03_rocky_root_0000_stat_mode_zero_is_good(self):
+        result, _ = self.run_real("0|root|0", distro="rocky", version="9.0")
         self.assertEqual(result["status"], "GOOD")
+        self.assertEqual(result["current_value"]["permission_octal"], "0")
+        self.assertTrue(result["current_value"]["permission_within_0400"])
 
     def test_04_non_root_owner_is_vulnerable(self):
         result, _ = self.run_real("1000|user|400")
@@ -249,6 +251,7 @@ printf '%s\\n' "${OS_GUARD_TEST_STAT_OUTPUT}"
         )
         self.assertNotIn("sed -i", source)
         self.assertNotRegex(source, r"(?m)^\s*echo\b.*>>")
+        self.assertIn("-c '%u|%U|%a'", source)
 
     def test_27_unsupported_os_is_uncheckable(self):
         result, _ = self.run_real("0|root|400", distro="debian", version="12")

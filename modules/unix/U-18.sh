@@ -76,8 +76,9 @@ if [ -z "$collection_error" ]; then
     if [ "$stat_rc" -ne 0 ]; then
         collection_error='STAT_COMMAND_FAILED'
     elif ! printf '%s\n' "$metadata_output" | awk -F'|' '
-        NF == 3 && $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[0-7][0-7][0-7]([0-7])?$/ { valid=1 }
-        END { exit valid ? 0 : 1 }
+        NF == 3 && $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[0-7]+$/ && length($3) <= 4 { valid++ ; next }
+        { invalid=1 }
+        END { exit (NR == 1 && valid == 1 && !invalid) ? 0 : 1 }
     ' >/dev/null 2>&1; then
         collection_error='STAT_OUTPUT_INVALID'
     else
