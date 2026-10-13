@@ -123,6 +123,7 @@ class HeartbeatLoopTests(unittest.TestCase):
                 agent_id=None,
                 log_path=Path(temp_dir) / "agent.log",
                 token_store_path=Path(temp_dir) / "credentials.json",
+                outbox_path=Path(temp_dir) / "outbox",
                 heartbeat_interval_seconds=0.001,
                 inventory_version="inv-1",
             )
@@ -143,8 +144,10 @@ class HeartbeatLoopTests(unittest.TestCase):
                 patch("os_guard_agent.agent.detect_os") as detect,
             ):
                 detect.return_value.distro = "rocky"
+                detect.return_value.version = "Rocky Linux 9"
                 detect.return_value.version_id = "9"
                 detect.return_value.kernel = "test"
+                detect.return_value.hostname = "rocky-test"
                 detect.return_value.architecture = "x86_64"
                 detect.return_value.supported = True
                 client_class.return_value.send_heartbeat.side_effect = send_heartbeat

@@ -43,13 +43,43 @@ class OsInfo:
 
 @dataclass(frozen=True)
 class EnrollmentRequest:
+    schema_version: str
+    message_id: str
+    sent_at: str
+    enrollment_id: str
     agent_version: str
     hostname: str
-    distro: str
-    version: str
-    version_id: str
-    kernel: str
-    architecture: str
+    os: Mapping[str, str]
+    capabilities: tuple[str, ...]
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        enrollment_id: str,
+        agent_version: str,
+        os_info: OsInfo,
+    ) -> "EnrollmentRequest":
+        return cls(
+            schema_version="2.0",
+            message_id=str(uuid4()),
+            sent_at=datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z"),
+            enrollment_id=enrollment_id,
+            hostname=os_info.hostname,
+            agent_version=agent_version,
+            os={
+                "family": "UNIX",
+                "distribution": os_info.distro,
+                "version": os_info.version_id,
+                "name": os_info.version,
+                "version_id": os_info.version_id,
+                "kernel": os_info.kernel,
+                "architecture": os_info.architecture,
+            },
+            capabilities=(Action.CHECK.value,),
+        )
 
 
 @dataclass(frozen=True)
@@ -61,10 +91,20 @@ class OperatingCredential:
     expires_at: str
 
 
+@dataclass(frozen=True)
+class CredentialRotation:
+    credential: OperatingCredential
+    rotation_id: str
+    old_credential_id: str
+    grace_until: str
+    confirmation: str
+
+
 class AgentHealth(str, Enum):
     READY = "READY"
     BUSY = "BUSY"
     DEGRADED = "DEGRADED"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True)
@@ -116,6 +156,74 @@ class HeartbeatResponse:
     poll_after_sec: int | None = None
 
 
+class CollectionStatus(str, Enum):
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class CollectionError:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class CollectionResult:
+    status: CollectionStatus
+    error: CollectionError | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "error": asdict(self.error) if self.error is not None else None,
+        }
+
+
+@dataclass(frozen=True)
+class Inventory:
+    schema_version: str
+    message_id: str
+    sent_at: str
+    agent_id: str
+    inventory_version: str
+    hostname: str
+    os: Mapping[str, Any]
+    roles: tuple[str, ...]
+    services: tuple[Mapping[str, Any], ...]
+    platform: str
+    agent_version: str
+    module_version: str
+    manifest_id: str
+    collection: Mapping[str, CollectionResult]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "message_id": self.message_id,
+            "sent_at": self.sent_at,
+            "agent_id": self.agent_id,
+            "inventory_version": self.inventory_version,
+            "hostname": self.hostname,
+            "os": dict(self.os),
+            "roles": list(self.roles),
+            "services": [dict(service) for service in self.services],
+            "platform": self.platform,
+            "agent_version": self.agent_version,
+            "module_version": self.module_version,
+            "manifest_id": self.manifest_id,
+            "collection": {
+                name: result.to_dict() for name, result in self.collection.items()
+            },
+        }
+
+
+@dataclass(frozen=True)
+class InventoryResponse:
+    inventory_version: str
+    received_at: str
+    duplicate: bool
+
+
 @dataclass(frozen=True)
 class TaskAuthorization:
     grant_id: str | None
@@ -138,6 +246,56 @@ class Task:
     lease_until: str
     expires_at: str
     authorization: TaskAuthorization
+    item_ids: tuple[str, ...] = ()
+    completed_item_ids: tuple[str, ...] = ()
+    module_version: str = ""
+    server_time: str = ""
+    lease_duration_sec: float = 0.0
+    lease_deadline_monotonic: float | None = field(default=None, repr=False)
+    simulation: bool = False
+    settings: Mapping[str, Any] = field(default_factory=dict)
+    backup_id: str | None = None
+    execution_phase: str = "CHECK"
+
+    def lease_is_valid(self, monotonic_now: float) -> bool:
+        return (
+            self.lease_deadline_monotonic is not None
+            and monotonic_now < self.lease_deadline_monotonic
+        )
+
+
+class TaskEvent(str, Enum):
+    STARTED = "STARTED"
+    PROGRESS = "PROGRESS"
+    LEASE_RENEWAL = "LEASE_RENEWAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class TaskEventResponse:
+    accepted_message_id: str
+    received_at: str
+    lease_until: str
+    server_time: str
+    lease_duration_sec: float
+    lease_deadline_monotonic: float
+
+
+@dataclass(frozen=True)
+class EvidenceUploadResponse:
+    evidence_id: str
+    sha256: str
+    byte_length: int
+    received_at: str | None = None
+    duplicate: bool = False
+
+
+@dataclass(frozen=True)
+class ResultUploadResponse:
+    accepted_ids: tuple[str, ...]
+    duplicate_ids: tuple[str, ...]
+    received_at: str
 
 
 @dataclass(frozen=True)

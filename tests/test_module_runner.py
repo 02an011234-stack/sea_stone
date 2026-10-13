@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,6 +47,8 @@ def task() -> Task:
         lease_until=future,
         expires_at=future,
         authorization=TaskAuthorization(None, None),
+        item_ids=tuple(f"U-{number:02d}" for number in range(1, 68)),
+        module_version="unix-2026.1",
     )
 
 
@@ -58,6 +62,46 @@ class ModuleRunnerTests(unittest.TestCase):
         self.assertEqual(len(plan.modules), 67)
         self.assertEqual(plan.modules[0].item_id, "U-01")
         self.assertEqual(plan.modules[-1].item_id, "U-67")
+
+    def test_partial_plan_runs_only_uncompleted_requested_items(self) -> None:
+        partial = replace(
+            task(),
+            scan_scope="PARTIAL",
+            planned_item_count=3,
+            item_ids=("U-03", "U-01", "U-02"),
+            completed_item_ids=("U-01",),
+        )
+        plan = self.runner.prepare_task(partial)
+        self.assertEqual(
+            tuple(module.item_id for module in plan.modules),
+            ("U-03", "U-02"),
+        )
+
+    def test_safe_password_policy_booleans_remain_boolean_evidence(self) -> None:
+        result = self.runner._parse_check_result(
+            json.dumps(
+                {
+                    "item_id": "U-01",
+                    "status": "GOOD",
+                    "review_state": "NOT_REQUIRED",
+                    "current_value": {
+                        "password_protected": True,
+                        "password_policy_enabled": False,
+                    },
+                    "evidence": {
+                        "item_id": "U-01",
+                        "module_version": "unix-2026.1",
+                        "os": {"distro": "rocky", "version_id": "9.4"},
+                        "password_protected": True,
+                    },
+                    "error": None,
+                }
+            ),
+            "U-01",
+        )
+        self.assertIs(result.current_value["password_protected"], True)
+        self.assertIs(result.current_value["password_policy_enabled"], False)
+        self.assertIs(result.evidence["password_protected"], True)
 
     def test_u01_is_selected_from_local_manifest(self) -> None:
         planned = self.runner.prepare_item("U-01", Action.CHECK)

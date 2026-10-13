@@ -8,7 +8,7 @@ import urllib.error
 
 from os_guard_agent.api_client import ApiClient, EnrollmentError, InvalidEnrollmentResponse
 from os_guard_agent.log_config import SecretRedactionFilter
-from os_guard_agent.models import EnrollmentRequest, OperatingCredential
+from os_guard_agent.models import EnrollmentRequest, OsInfo, OperatingCredential
 
 
 class FakeResponse:
@@ -30,14 +30,18 @@ class FakeResponse:
 
 
 def enrollment_request() -> EnrollmentRequest:
-    return EnrollmentRequest(
+    return EnrollmentRequest.create(
+        enrollment_id="enrollment-1",
         agent_version="0.1.0",
-        hostname="rocky-test",
-        distro="rocky",
-        version="9.4",
-        version_id="9.4",
-        kernel="5.14.0",
-        architecture="x86_64",
+        os_info=OsInfo(
+            distro="rocky",
+            version="Rocky Linux 9.4",
+            version_id="9.4",
+            kernel="5.14.0",
+            hostname="rocky-test",
+            architecture="x86_64",
+            supported=True,
+        ),
     )
 
 
@@ -67,6 +71,11 @@ class ApiClientTests(unittest.TestCase):
             captured["request"].get_header("X-enrollment-token"), "enrollment-secret"
         )
         self.assertEqual(captured["timeout"], 10.0)
+        payload = json.loads(captured["request"].data)
+        self.assertEqual(payload["enrollment_id"], "enrollment-1")
+        self.assertEqual(payload["os"]["family"], "UNIX")
+        self.assertEqual(payload["capabilities"], ["CHECK"])
+        self.assertNotIn("agent_id", payload)
 
     def test_enrollment_http_failure_is_sanitized(self) -> None:
         client = ApiClient(

@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Unix agent for OS Guard"
 requires-python = ">=3.9"
 dependencies = [
+    "cryptography>=41.0.0",
     "tomli>=2.0.1; python_version < '3.11'",
 ]
 
@@ -19,4 +20,3 @@ version = {attr = "os_guard_agent.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

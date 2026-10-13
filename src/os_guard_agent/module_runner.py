@@ -60,17 +60,34 @@ class ModuleRunner:
             raise ManifestError("Task manifest_id does not match loaded manifest")
         if task.action is not Action.CHECK:
             raise ManifestError("only CHECK tasks can be prepared in this Agent version")
-        if task.scan_scope != "FULL":
-            raise ManifestError("only FULL CHECK tasks can be prepared in this Agent version")
+        if task.module_version != self.manifest.module_version:
+            raise ManifestError("Task module_version does not match loaded manifest")
+        if task.scan_scope not in {"FULL", "PARTIAL"}:
+            raise ManifestError("unsupported CHECK scan_scope")
 
-        if any(not item.implemented for item in self.manifest.items.values()):
-            raise ManifestError("FULL CHECK is unavailable until all 67 modules are implemented")
+        planned_ids = task.item_ids
+        if task.planned_item_count != len(planned_ids):
+            raise ManifestError("Task planned_item_count does not match item_ids")
+        if len(planned_ids) != len(set(planned_ids)):
+            raise ManifestError("Task item_ids contains duplicates")
+        if not set(task.completed_item_ids).issubset(planned_ids):
+            raise ManifestError("Task completed_item_ids is outside item_ids")
+        if task.scan_scope == "FULL" and set(planned_ids) != set(self.manifest.items):
+            raise ManifestError("FULL CHECK item_ids must match the local manifest")
+        if task.scan_scope == "PARTIAL" and not planned_ids:
+            raise ManifestError("PARTIAL CHECK requires item_ids")
+
+        requested_items = tuple(
+            item_id for item_id in planned_ids if item_id not in task.completed_item_ids
+        )
+        if any(not self.manifest.require_item(item_id).implemented for item_id in planned_ids):
+            raise ManifestError("CHECK plan contains an unimplemented module")
 
         modules = tuple(
             self.prepare_item(item_id, task.action)
-            for item_id in sorted(self.manifest.items)
+            for item_id in requested_items
         )
-        if len(modules) != 67:
+        if task.scan_scope == "FULL" and len(modules) + len(task.completed_item_ids) != 67:
             raise ManifestError("FULL CHECK execution plan must contain 67 items")
         return ExecutionPlan(task.job_id, task.manifest_id, modules)
 

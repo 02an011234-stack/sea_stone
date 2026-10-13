@@ -12,3 +12,4 @@ heartbeat_interval_seconds = 30
 task_claim_interval_seconds = 10
 inventory_version = "unavailable"
 manifest_path = "/opt/os-guard-agent/modules/manifest.json"
+outbox_path = "/var/lib/os-guard-agent/outbox"

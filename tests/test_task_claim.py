@@ -33,6 +33,7 @@ def future_time(minutes: int = 5) -> str:
 
 
 def valid_job() -> dict:
+    item_ids = [f"U-{number:02d}" for number in range(1, 68)]
     return {
         "schema_version": "2.0",
         "job_id": "job-1",
@@ -43,11 +44,20 @@ def valid_job() -> dict:
         "scan_scope": "FULL",
         "attempt_id": "attempt-1",
         "planned_item_count": 67,
+        "item_ids": item_ids,
+        "completed_item_ids": [],
         "manifest_id": "manifest-unix-67-v1",
+        "module_version": "unix-2026.1",
         "criteria_snapshot_id": "criteria-1",
         "lease_until": future_time(2),
         "expires_at": future_time(5),
+        "server_time": future_time(0),
+        "lease_duration_sec": 120.0,
         "authorization": {"grant_id": None, "approval_id": None},
+        "simulation": False,
+        "settings": {},
+        "backup_id": None,
+        "execution_phase": "CHECK",
     }
 
 
@@ -81,6 +91,11 @@ class TaskClaimTests(unittest.TestCase):
         )
         request_payload = json.loads(captured["request"].data)
         self.assertEqual(request_payload["capabilities"], ["CHECK"])
+        self.assertEqual(request_payload["agent_version"], "0.1.0")
+        self.assertEqual(request_payload["module_version"], "unix-2026.1")
+        self.assertEqual(request_payload["schema_version"], "2.0")
+        self.assertIn("message_id", request_payload)
+        self.assertIn("sent_at", request_payload)
 
     def test_no_task_204(self) -> None:
         self.assertIsNone(client_with({}, status=204).claim_task(credential()))
@@ -114,6 +129,7 @@ class TaskClaimTests(unittest.TestCase):
     def test_expired_lease(self) -> None:
         job = valid_job()
         job["lease_until"] = future_time(-1)
+        job["lease_duration_sec"] = 0
         with self.assertRaisesRegex(InvalidTaskError, "lease has expired"):
             client_with(job).claim_task(credential())
 

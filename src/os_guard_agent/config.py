@@ -29,6 +29,7 @@ class AgentConfig:
     task_claim_interval_seconds: float = 10.0
     inventory_version: str = "unavailable"
     manifest_path: Path = Path("/opt/os-guard-agent/modules/manifest.json")
+    outbox_path: Path = Path("/var/lib/os-guard-agent/outbox")
 
 
 def _required_string(values: Mapping[str, Any], key: str) -> str:
@@ -96,6 +97,9 @@ def load_config(path: Path) -> AgentConfig:
     manifest_path = Path(
         str(agent.get("manifest_path", "/opt/os-guard-agent/modules/manifest.json"))
     )
+    outbox_path = Path(
+        str(agent.get("outbox_path", "/var/lib/os-guard-agent/outbox"))
+    )
 
     return AgentConfig(
         central_server_url=central_server_url,
@@ -108,4 +112,5 @@ def load_config(path: Path) -> AgentConfig:
         task_claim_interval_seconds=task_claim_interval_seconds,
         inventory_version=inventory_version,
         manifest_path=manifest_path,
+        outbox_path=outbox_path,
     )
