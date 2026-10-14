@@ -40,3 +40,43 @@ def test_u14_dynamic_path_is_not_modified():
         result, _ = case.run_action("PREVIEW", case.environment(fixture))
         assert result["outcome"] == "FAILED"
         assert fixture["target"].read_bytes() == before
+
+
+def test_u14_ubuntu_without_selinux_preview_is_read_only():
+    case = TestU14Harden("test_02_vulnerable_minimal_change")
+    case.setUp()
+    with case.temporary_directory() as temp_dir:
+        fixture = case.create_fixture(temp_dir)
+        before = fixture["target"].read_bytes()
+        result, _ = case.run_action(
+            "PREVIEW",
+            case.environment(
+                fixture,
+                distro="ubuntu",
+                version="24.04",
+                extra={"OS_GUARD_TEST_SELINUX_STATE": "disabled"},
+            ),
+        )
+        assert result["outcome"] == "PLANNED"
+        assert fixture["target"].read_bytes() == before
+
+
+def test_u14_enabled_selinux_context_failure_is_blocked():
+    case = TestU14Harden("test_02_vulnerable_minimal_change")
+    case.setUp()
+    with case.temporary_directory() as temp_dir:
+        fixture = case.create_fixture(temp_dir)
+        before = fixture["target"].read_bytes()
+        result, _ = case.run_action(
+            "PREVIEW",
+            case.environment(
+                fixture,
+                extra={
+                    "OS_GUARD_TEST_SELINUX_STATE": "enabled",
+                    "OS_GUARD_TEST_SELINUX_CONTEXT_FAILURE": "true",
+                },
+            ),
+        )
+        assert result["outcome"] == "FAILED"
+        assert result["error"]["code"] == "SELINUX_CONTEXT_COLLECTION_FAILED"
+        assert fixture["target"].read_bytes() == before

@@ -148,13 +148,17 @@ os_guard_content_add_target() {
         return 1
     fi
 
-    metadata=$(
-        "$content_stat_command" -c '%d|%i|%u|%g|%a|%Y|%Z|%C' -- "$target_path" 2>/dev/null
-    )
-    if [ $? -ne 0 ]; then
-        os_guard_content_set_error 'STAT_COMMAND_FAILED' 'configuration metadata collection failed'
+    if ! os_guard_harden_collect_metadata_with_context \
+        "$content_stat_command" \
+        '%d|%i|%u|%g|%a|%Y|%Z' \
+        "$target_path" \
+        "$content_test_root"; then
+        os_guard_content_set_error \
+            "$os_guard_harden_stat_error_code" \
+            'configuration metadata collection failed'
         return 1
     fi
+    metadata=$os_guard_harden_stat_metadata
     if ! printf '%s\n' "$metadata" | awk -F'|' '
         NF == 8 &&
         $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ &&
@@ -230,8 +234,8 @@ os_guard_content_discover_targets() {
         content_state_fingerprint=$(printf '%s\n' "$content_records" | awk -F'|' '
             {
                 if (NR > 1) printf ";"
-                printf "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s", \
-                    $1,$3,$4,$5,$6,$7,$8,$9,$11,$12
+                printf "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s", \
+                    $1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
             }
             END { printf "\n" }
         ')
@@ -515,11 +519,16 @@ EOF
         display_path target_path device inode owner_uid group_gid permission \
         modified_time changed_time context current_hash remaining_fields; do
         restored_hash=$(os_guard_content_hash_file "$target_path")
-        restored_metadata=$(
-            "$content_stat_command" -c '%u|%g|%a' -- "$target_path" 2>/dev/null
-        )
+        if ! os_guard_harden_collect_metadata_with_context \
+            "$content_stat_command" \
+            '%u|%g|%a' \
+            "$target_path" \
+            "$content_test_root"; then
+            return 1
+        fi
+        restored_metadata=$os_guard_harden_stat_metadata
         if [ "$restored_hash" != "$current_hash" ] || \
-            [ "$restored_metadata" != "$owner_uid|$group_gid|$permission" ]; then
+            [ "$restored_metadata" != "$owner_uid|$group_gid|$permission|$context" ]; then
             return 1
         fi
     done <<EOF

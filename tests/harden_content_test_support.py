@@ -66,7 +66,11 @@ class ContentHardenTestBase(unittest.TestCase):
             newline="\n",
         )
         metadata = root / "metadata.state"
-        metadata.write_text("100|200|0|0|644|300|400|?\n", encoding="utf-8", newline="\n")
+        metadata.write_text(
+            "100|200|0|0|644|300|400|system_u:object_r:etc_t:s0\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         command_dir = root / "bin"
         command_dir.mkdir()
 
@@ -77,7 +81,11 @@ class ContentHardenTestBase(unittest.TestCase):
 [ "${OS_GUARD_TEST_STAT_FAILURE:-false}" = true ] && exit 1
 IFS='|' read -r device inode uid gid mode mtime ctime context < "$OS_GUARD_TEST_METADATA_STATE"
 case "$2" in
-    '%d|%i|%u|%g|%a|%Y|%Z|%C') printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$gid" "$mode" "$mtime" "$ctime" "$context" ;;
+    '%d|%i|%u|%g|%a|%Y|%Z') printf '%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$gid" "$mode" "$mtime" "$ctime" ;;
+    '%C')
+        [ "${OS_GUARD_TEST_SELINUX_CONTEXT_FAILURE:-false}" != true ] || exit 1
+        printf '%s\n' "$context"
+        ;;
     '%u|%g|%a') printf '%s|%s|%s\n' "$uid" "$gid" "$mode" ;;
     *) exit 2 ;;
 esac

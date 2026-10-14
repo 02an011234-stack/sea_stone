@@ -191,14 +191,17 @@ os_guard_multi_add_target() {
             ;;
     esac
 
-    metadata_output=$(
-        "$multi_stat_command" -c '%d|%i|%u|%U|%g|%G|%a|%Y|%Z|%C' -- "$target_path" 2>/dev/null
-    )
-    metadata_status=$?
-    if [ "$metadata_status" -ne 0 ]; then
-        os_guard_multi_set_error 'STAT_COMMAND_FAILED' 'target metadata collection failed'
+    if ! os_guard_harden_collect_metadata_with_context \
+        "$multi_stat_command" \
+        '%d|%i|%u|%U|%g|%G|%a|%Y|%Z' \
+        "$target_path" \
+        "$multi_test_root"; then
+        os_guard_multi_set_error \
+            "$os_guard_harden_stat_error_code" \
+            'target metadata collection failed'
         return 1
     fi
+    metadata_output=$os_guard_harden_stat_metadata
 
     metadata_valid=$(printf '%s\n' "$metadata_output" | awk -F'|' '
         NF == 10 &&
@@ -300,8 +303,8 @@ os_guard_multi_calculate_fingerprint() {
             if (NR > 1) {
                 printf ";"
             }
-            printf "%s:%s:%s:%s:%s:%s:%s:%s:%s", \
-                $1, $4, $5, $6, $8, $10, $11, $12, $23
+            printf "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s", \
+                $1, $4, $5, $6, $8, $10, $11, $12, $13, $23
         }
         END {
             printf "\n"
@@ -634,12 +637,17 @@ EOF
 
     while IFS='|' read -r \
         display_path actual_path target_type device inode owner_uid owner_name \
-        group_gid group_name permission remaining_fields; do
+        group_gid group_name permission modified_time changed_time context remaining_fields; do
 
-        restored_metadata=$(
-            "$multi_stat_command" -c '%d|%i|%u|%g|%a' -- "$actual_path" 2>/dev/null
-        )
-        expected_metadata="$device|$inode|$owner_uid|$group_gid|$permission"
+        if ! os_guard_harden_collect_metadata_with_context \
+            "$multi_stat_command" \
+            '%d|%i|%u|%g|%a' \
+            "$actual_path" \
+            "$multi_test_root"; then
+            return 1
+        fi
+        restored_metadata=$os_guard_harden_stat_metadata
+        expected_metadata="$device|$inode|$owner_uid|$group_gid|$permission|$context"
         if [ "$restored_metadata" != "$expected_metadata" ]; then
             return 1
         fi

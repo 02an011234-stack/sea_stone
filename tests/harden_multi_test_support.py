@@ -99,7 +99,7 @@ class MultiTargetHardenTestBase(unittest.TestCase):
                         str(1000 + index),
                         "200",
                         "300",
-                        "?",
+                        "system_u:object_r:etc_t:s0",
                         acl,
                         expected_uid,
                         expected_name,
@@ -186,7 +186,11 @@ case "$format" in
     '%g|%G|%a') printf '%s|%s|%s\n' "$gid" "$group" "$mode" ;;
     '%d|%i') printf '%s|%s\n' "$device" "$inode" ;;
     '%d|%i|%u|%g|%a') printf '%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$gid" "$mode" ;;
-    '%d|%i|%u|%U|%g|%G|%a|%Y|%Z|%C') printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$owner" "$gid" "$group" "$mode" "$mtime" "$ctime" "$context" ;;
+    '%d|%i|%u|%U|%g|%G|%a|%Y|%Z') printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$owner" "$gid" "$group" "$mode" "$mtime" "$ctime" ;;
+    '%C')
+        [ "${OS_GUARD_TEST_SELINUX_CONTEXT_FAILURE:-false}" != true ] || exit 1
+        printf '%s\n' "$context"
+        ;;
     *) exit 2 ;;
 esac
 ''',
@@ -555,7 +559,10 @@ exit 0
             actual.write_text(self.sensitive_marker, encoding="utf-8")
         uid, name = self.expected_owner(display)
         with fixture["state"].open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(f"{new_display}|{kind}|{uid}|{name}|0|root|{mode}|100|9999|200|300|?|safe|{uid}|{name}|{target_class}\n")
+            stream.write(
+                f"{new_display}|{kind}|{uid}|{name}|0|root|{mode}|100|9999|200|300|"
+                f"system_u:object_r:etc_t:s0|safe|{uid}|{name}|{target_class}\n"
+            )
 
     def test_22_idempotent_second_preview(self):
         with self.temporary_directory() as temp_dir:

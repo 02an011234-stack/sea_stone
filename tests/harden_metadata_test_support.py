@@ -56,7 +56,7 @@ class MetadataHardenTestBase(unittest.TestCase):
 
         state_file = fixture_root / "metadata.state"
         state_file.write_text(
-            f"{uid}|{owner}|{gid}|{mode or self.good_mode}|100|200|300|400|?\n",
+            f"{uid}|{owner}|{gid}|{mode or self.good_mode}|100|200|300|400|system_u:object_r:etc_t:s0\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -94,8 +94,14 @@ case "$2" in
     '%u|%U|%a')
         printf '%s|%s|%s\n' "$uid" "$owner" "$mode"
         ;;
-    '%d|%i|%u|%U|%g|%a|%Y|%Z|%C')
-        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$owner" "$gid" "$mode" "$mtime" "$ctime" "$context"
+    '%d|%i|%u|%U|%g|%a|%Y|%Z')
+        printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$device" "$inode" "$uid" "$owner" "$gid" "$mode" "$mtime" "$ctime"
+        ;;
+    '%C')
+        if [ "${OS_GUARD_TEST_SELINUX_CONTEXT_FAILURE:-false}" = true ]; then
+            exit 1
+        fi
+        printf '%s\n' "$context"
         ;;
     '%d|%i')
         printf '%s|%s\n' "$device" "$inode"

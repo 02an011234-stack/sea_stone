@@ -44,6 +44,110 @@ os_guard_harden_is_octal_mode() {
     return 0
 }
 
+os_guard_harden_detect_selinux_state() {
+    inspected_test_root=$1
+    os_guard_harden_selinux_state='unknown'
+
+    if [ -n "$inspected_test_root" ]; then
+        test_selinux_state=${OS_GUARD_TEST_SELINUX_STATE:-enabled}
+        case "$test_selinux_state" in
+            enabled|disabled)
+                os_guard_harden_selinux_state=$test_selinux_state
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    if [ -e /sys/fs/selinux/enforce ]; then
+        if [ ! -r /sys/fs/selinux/enforce ]; then
+            return 1
+        fi
+        os_guard_harden_selinux_state='enabled'
+        return 0
+    fi
+
+    getenforce_command=$(command -v getenforce 2>/dev/null || true)
+    if [ -n "$getenforce_command" ]; then
+        getenforce_output=$("$getenforce_command" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
+        case "$getenforce_output" in
+            Enforcing|Permissive)
+                os_guard_harden_selinux_state='enabled'
+                ;;
+            Disabled)
+                os_guard_harden_selinux_state='disabled'
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    selinuxenabled_command=$(command -v selinuxenabled 2>/dev/null || true)
+    if [ -n "$selinuxenabled_command" ]; then
+        if "$selinuxenabled_command" >/dev/null 2>&1; then
+            os_guard_harden_selinux_state='enabled'
+        else
+            os_guard_harden_selinux_state='disabled'
+        fi
+        return 0
+    fi
+
+    os_guard_harden_selinux_state='disabled'
+    return 0
+}
+
+os_guard_harden_collect_metadata_with_context() {
+    inspected_stat_command=$1
+    inspected_stat_format=$2
+    inspected_path=$3
+    inspected_test_root=$4
+
+    os_guard_harden_stat_error_code=''
+    os_guard_harden_stat_metadata=$(
+        "$inspected_stat_command" -c "$inspected_stat_format" -- "$inspected_path" 2>/dev/null
+    )
+    if [ $? -ne 0 ]; then
+        os_guard_harden_stat_error_code='STAT_COMMAND_FAILED'
+        return 1
+    fi
+
+    if ! os_guard_harden_detect_selinux_state "$inspected_test_root"; then
+        os_guard_harden_stat_error_code='SELINUX_STATE_UNDETERMINED'
+        return 1
+    fi
+
+    if [ "$os_guard_harden_selinux_state" = 'enabled' ]; then
+        os_guard_harden_stat_context=$(
+            "$inspected_stat_command" -c '%C' -- "$inspected_path" 2>/dev/null
+        )
+        if [ $? -ne 0 ] || ! printf '%s\n' "$os_guard_harden_stat_context" | awk '
+            NR == 1 && $0 != "" && $0 != "?" && index($0, "|") == 0 {
+                valid = 1
+            }
+            END {
+                exit (NR == 1 && valid) ? 0 : 1
+            }
+        '; then
+            os_guard_harden_stat_error_code='SELINUX_CONTEXT_COLLECTION_FAILED'
+            return 1
+        fi
+    else
+        os_guard_harden_stat_context='not-applicable'
+    fi
+
+    os_guard_harden_stat_metadata=$(printf '%s|%s' \
+        "$os_guard_harden_stat_metadata" \
+        "$os_guard_harden_stat_context")
+    return 0
+}
+
 os_guard_harden_create_private_directory() {
     directory_path=$1
 
@@ -185,15 +289,17 @@ os_guard_harden_validate_file_target() {
 }
 
 os_guard_harden_collect_file_state() {
-    harden_metadata_output=$(
-        "$harden_stat_command" -c '%d|%i|%u|%U|%g|%a|%Y|%Z|%C' -- "$harden_target_file" 2>/dev/null
-    )
-    harden_metadata_status=$?
-
-    if [ "$harden_metadata_status" -ne 0 ]; then
-        os_guard_harden_set_error 'STAT_COMMAND_FAILED' 'target metadata collection failed'
+    if ! os_guard_harden_collect_metadata_with_context \
+        "$harden_stat_command" \
+        '%d|%i|%u|%U|%g|%a|%Y|%Z' \
+        "$harden_target_file" \
+        "$harden_test_root"; then
+        os_guard_harden_set_error \
+            "$os_guard_harden_stat_error_code" \
+            'target metadata collection failed'
         return 1
     fi
+    harden_metadata_output=$os_guard_harden_stat_metadata
 
     harden_metadata_valid=$(printf '%s\n' "$harden_metadata_output" | awk -F'|' '
         NF == 9 &&
@@ -236,14 +342,15 @@ os_guard_harden_collect_file_state() {
     harden_current_ctime=$(printf '%s\n' "$harden_metadata_output" | awk -F'|' '{ print $8 }')
     harden_current_selinux_context=$(printf '%s\n' "$harden_metadata_output" | awk -F'|' '{ print $9 }')
 
-    harden_state_fingerprint=$(printf '%s:%s:%s:%s:%s:%s:%s' \
+    harden_state_fingerprint=$(printf '%s:%s:%s:%s:%s:%s:%s:%s' \
         "$harden_current_device" \
         "$harden_current_inode" \
         "$harden_current_owner_uid" \
         "$harden_current_group_gid" \
         "$harden_current_permission" \
         "$harden_current_mtime" \
-        "$harden_current_ctime")
+        "$harden_current_ctime" \
+        "$harden_current_selinux_context")
 
     return 0
 }
@@ -578,6 +685,10 @@ os_guard_harden_rollback_file_changes() {
         return 1
     fi
 
+    if [ "$harden_current_selinux_context" != "$harden_original_selinux_context" ]; then
+        return 1
+    fi
+
     harden_rollback_success=true
     return 0
 }
@@ -588,6 +699,7 @@ os_guard_harden_remember_file_state() {
     harden_original_permission=$harden_current_permission
     harden_original_device=$harden_current_device
     harden_original_inode=$harden_current_inode
+    harden_original_selinux_context=$harden_current_selinux_context
 }
 
 os_guard_harden_execute_file_changes() {
@@ -704,6 +816,7 @@ os_guard_harden_initialize_file_state() {
     harden_current_mtime=''
     harden_current_ctime=''
     harden_current_selinux_context=''
+    harden_original_selinux_context=''
     harden_state_fingerprint=''
     harden_expected_permission=''
     harden_owner_change_required=false
