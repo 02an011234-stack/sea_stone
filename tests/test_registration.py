@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ import pytest
 from os_guard_agent.__main__ import main
 from os_guard_agent.models import OperatingCredential
 from os_guard_agent.registration import RegistrationFileError, load_registration_file
+from os_guard_agent.registration import validate_enrollment_runtime
 
 
 def registration_document() -> dict:
@@ -54,6 +56,11 @@ def test_registration_file_enrolls_without_token_argv_and_is_removed_after_succe
         with (
             patch("os_guard_agent.__main__.Agent") as agent_class,
             patch("os_guard_agent.__main__.configure_logging"),
+            patch("os_guard_agent.__main__.validate_enrollment_runtime"),
+            patch(
+                "os_guard_agent.__main__.run_preflight",
+                return_value=SimpleNamespace(local_status="PENDING"),
+            ),
         ):
             agent_class.return_value.enroll.return_value = OperatingCredential(
                 "server-1", "agent-1", "credential-1", "operating-secret", "expiry"
@@ -85,6 +92,11 @@ def test_failed_enrollment_keeps_registration_file_for_explicit_recovery() -> No
         with (
             patch("os_guard_agent.__main__.Agent") as agent_class,
             patch("os_guard_agent.__main__.configure_logging"),
+            patch("os_guard_agent.__main__.validate_enrollment_runtime"),
+            patch(
+                "os_guard_agent.__main__.run_preflight",
+                return_value=SimpleNamespace(local_status="PENDING"),
+            ),
         ):
             agent_class.return_value.enroll.side_effect = RuntimeError("network failed")
             with pytest.raises(RuntimeError):
@@ -97,6 +109,38 @@ def test_failed_enrollment_keeps_registration_file_for_explicit_recovery() -> No
                         str(registration_path),
                     ]
                 )
+        assert registration_path.exists()
+
+
+def test_failed_preflight_does_not_read_or_consume_registration_file() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        registration_path = root / "registration.json"
+        registration_path.write_text(json.dumps(registration_document()), encoding="utf-8")
+        config_path = root / "agent.toml"
+        write_config(config_path, root / "credentials.json")
+        with (
+            patch("os_guard_agent.__main__.Agent"),
+            patch("os_guard_agent.__main__.configure_logging"),
+            patch("os_guard_agent.__main__.validate_enrollment_runtime"),
+            patch(
+                "os_guard_agent.__main__.run_preflight",
+                return_value=SimpleNamespace(local_status="FAILED"),
+            ),
+            patch("os_guard_agent.__main__.load_registration_file") as load_registration,
+        ):
+            result = main(
+                [
+                    "--config",
+                    str(config_path),
+                    "enroll",
+                    "--registration-file",
+                    str(registration_path),
+                ]
+            )
+
+        assert result == 1
+        load_registration.assert_not_called()
         assert registration_path.exists()
 
 
@@ -122,3 +166,19 @@ def test_registration_url_family_expiry_and_fingerprint_are_validated() -> None:
 def test_cli_has_no_enrollment_token_argument() -> None:
     with pytest.raises(SystemExit):
         main(["enroll", "--enrollment-token", "must-not-be-supported"])
+
+
+def test_root_enrollment_is_rejected_before_credential_write(monkeypatch, tmp_path) -> None:
+    import os_guard_agent.registration as registration
+
+    monkeypatch.setattr(registration, "POSIX_RUNTIME", True)
+    monkeypatch.setattr(registration.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(
+        registration,
+        "pwd",
+        SimpleNamespace(
+            getpwnam=lambda _name: SimpleNamespace(pw_uid=991, pw_gid=991)
+        ),
+    )
+    with pytest.raises(RegistrationFileError, match="must run as the osguard"):
+        validate_enrollment_runtime(tmp_path / "credentials.json")

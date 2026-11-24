@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+export PYTHONPATH=/opt/os-guard-agent/src
+exec /usr/bin/python3 -m os_guard_agent --config /etc/os-guard-agent/agent.toml

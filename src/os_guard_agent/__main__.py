@@ -13,10 +13,12 @@ from .agent import Agent
 from .api_client import ApiClientError
 from .config import ConfigError, load_config
 from .log_config import configure_logging
+from .preflight import PreflightOptions, run_preflight
 from .registration import (
     RegistrationFileError,
     dispose_registration_file,
     load_registration_file,
+    validate_enrollment_runtime,
 )
 
 
@@ -55,6 +57,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         configure_logging(config.log_path, config.log_level)
         agent = Agent(config)
         if args.command == "enroll":
+            validate_enrollment_runtime(config.token_store_path)
+            preflight = run_preflight(
+                PreflightOptions(
+                    config_path=args.config,
+                    network=True,
+                    require_credential=False,
+                )
+            )
+            if preflight.local_status == "FAILED":
+                print(
+                    "Registration error: local pre-enrollment Preflight failed",
+                    file=sys.stderr,
+                )
+                return 1
             registration = load_registration_file(
                 args.registration_file,
                 config.central_server_url,

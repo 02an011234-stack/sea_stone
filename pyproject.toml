@@ -14,6 +14,8 @@ dependencies = [
 
 [project.scripts]
 os-guard-agent = "os_guard_agent.__main__:main"
+os-guard-install = "os_guard_agent.installer:main"
+os-guard-preflight = "os_guard_agent.preflight:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "os_guard_agent.__version__"}

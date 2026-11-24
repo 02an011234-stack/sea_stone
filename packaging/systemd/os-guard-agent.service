@@ -1,0 +1,53 @@
+[Unit]
+Description=OS Guard Unix Agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/os-guard-agent/credentials.json
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=osguard
+Group=osguard
+WorkingDirectory=/opt/os-guard-agent
+Environment=PYTHONPATH=/opt/os-guard-agent/src
+ExecStartPre=/opt/os-guard-agent/bin/os-guard-preflight --service
+ExecStart=/opt/os-guard-agent/bin/os-guard-agent
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=30s
+KillMode=mixed
+UMask=0077
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/os-guard-agent /var/log/os-guard-agent
+StateDirectory=os-guard-agent
+StateDirectoryMode=0700
+LogsDirectory=os-guard-agent
+LogsDirectoryMode=0750
+RuntimeDirectory=os-guard-agent
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
