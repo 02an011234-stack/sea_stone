@@ -67,3 +67,15 @@ def test_new_attempt_discards_only_stale_unsent_requests_for_same_job() -> None:
             "current",
             "other",
         }
+
+
+def test_outbox_parent_symlink_is_rejected(tmp_path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    try:
+        linked.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises(OutboxError, match="symlinks"):
+        OutboxStore(linked / "outbox").initialize()

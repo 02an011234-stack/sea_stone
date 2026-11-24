@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from os_guard_agent.models import OperatingCredential
-from os_guard_agent.token_store import TokenStore
+from os_guard_agent.token_store import TokenStore, TokenStoreError
 
 
 class TokenStoreTests(unittest.TestCase):
@@ -36,6 +36,20 @@ class TokenStoreTests(unittest.TestCase):
             store.save(credential)
             store.clear()
             self.assertFalse(path.exists())
+
+    def test_parent_symlink_is_rejected(self) -> None:
+        credential = OperatingCredential("srv", "agt", "cred", "token", "expiry")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            real = root / "real"
+            real.mkdir()
+            linked = root / "linked"
+            try:
+                linked.symlink_to(real, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+            with self.assertRaises(TokenStoreError):
+                TokenStore(linked / "credentials.json").save(credential)
 
 
 if __name__ == "__main__":

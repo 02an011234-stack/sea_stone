@@ -31,6 +31,17 @@ class TokenStore:
     def save(self, credential: OperatingCredential) -> None:
         self._write_document(asdict(credential))
 
+    @staticmethod
+    def _reject_symlink_components(path: Path) -> None:
+        absolute = path.absolute()
+        current = Path(absolute.anchor)
+        for component in absolute.parts[1:]:
+            current = current / component
+            if current.is_symlink():
+                raise TokenStoreError(
+                    "operating credential path must not contain symbolic links"
+                )
+
     def stage_rotation(
         self,
         previous: OperatingCredential,
@@ -89,6 +100,7 @@ class TokenStore:
     def _write_document(self, payload: Mapping[str, Any]) -> None:
         parent = self.path.parent
         try:
+            self._reject_symlink_components(parent)
             parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             if parent.is_symlink():
                 raise TokenStoreError("operating credential directory must not be a symlink")
@@ -136,6 +148,7 @@ class TokenStore:
 
     def _read_document(self) -> dict[str, Any]:
         try:
+            self._reject_symlink_components(self.path.parent)
             if self.path.is_symlink():
                 raise TokenStoreError("operating credential path must not be a symlink")
             if os.name == "posix" and self.path.stat().st_mode & 0o077:

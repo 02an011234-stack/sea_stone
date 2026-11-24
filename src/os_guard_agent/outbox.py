@@ -41,7 +41,17 @@ class OutboxStore:
         self.pending_dir = root / "pending"
         self.ack_dir = root / "acks"
 
+    @staticmethod
+    def _reject_symlink_components(path: Path) -> None:
+        absolute = path.absolute()
+        current = Path(absolute.anchor)
+        for component in absolute.parts[1:]:
+            current = current / component
+            if current.is_symlink():
+                raise OutboxError("outbox path must not contain symlinks")
+
     def initialize(self) -> None:
+        self._reject_symlink_components(self.root.parent)
         for directory in (self.root, self.pending_dir, self.ack_dir):
             try:
                 if directory.is_symlink():
