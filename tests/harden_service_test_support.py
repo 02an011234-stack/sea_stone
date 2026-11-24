@@ -142,6 +142,12 @@ case "$action" in
                 ;;
             stop)
                 update_field "$unit_name" 2 inactive
+                if [ -n "${OS_GUARD_TEST_SYNC_CHECK_FILE:-}" ] && \
+                    [ -n "${OS_GUARD_TEST_SYNC_CHECK_GOOD_ROW:-}" ] && \
+                    ! awk -F'|' '$2 == "active" { found=1 } END { exit found ? 0 : 1 }' "$state_file"; then
+                    printf '%s\n' "$OS_GUARD_TEST_SYNC_CHECK_GOOD_ROW" > \
+                        "$OS_GUARD_TEST_SYNC_CHECK_FILE"
+                fi
                 ;;
             enable)
                 if [ "$runtime_option" = true ]; then

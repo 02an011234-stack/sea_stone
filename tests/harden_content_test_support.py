@@ -87,6 +87,11 @@ case "$2" in
         printf '%s\n' "$context"
         ;;
     '%u|%g|%a') printf '%s|%s|%s\n' "$uid" "$gid" "$mode" ;;
+    '%u|%U|%a')
+        owner_name=root
+        [ "$uid" = 0 ] || owner_name=fixture-user
+        printf '%s|%s|%s\n' "$uid" "$owner_name" "$mode"
+        ;;
     *) exit 2 ;;
 esac
 ''',

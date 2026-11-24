@@ -1,4 +1,7 @@
-from harden_metadata_test_support import MetadataHardenTestBase
+import os
+import subprocess
+
+from harden_metadata_test_support import MetadataHardenTestBase, ROOT, shell_path
 
 
 class TestU16Harden(MetadataHardenTestBase):
@@ -7,6 +10,47 @@ class TestU16Harden(MetadataHardenTestBase):
     target_path = "/etc/passwd"
     good_mode = "644"
     vulnerable_mode = "666"
+
+
+def _detect_runtime_selinux_state(tmp_path, getenforce_output):
+    shell = shell_path()
+    assert shell is not None
+    command_directory = tmp_path / "bin"
+    command_directory.mkdir()
+    getenforce = command_directory / "getenforce"
+    getenforce.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' '{getenforce_output}'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    getenforce.chmod(0o755)
+    common = (ROOT / "modules" / "lib" / "harden_common.sh").as_posix()
+    environment = os.environ.copy()
+    environment["PATH"] = f"{command_directory.as_posix()}:/usr/bin:/bin"
+    completed = subprocess.run(
+        [
+            shell,
+            "-c",
+            f'. "{common}"\n'
+            "os_guard_harden_detect_selinux_state '' || exit 10\n"
+            "printf '%s\\n' \"$os_guard_harden_selinux_state\"\n",
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
+
+
+def test_runtime_selinux_enforcing_is_enabled(tmp_path):
+    assert _detect_runtime_selinux_state(tmp_path, "Enforcing") == "enabled"
+
+
+def test_runtime_selinux_permissive_is_enabled(tmp_path):
+    assert _detect_runtime_selinux_state(tmp_path, "Permissive") == "enabled"
 
 
 def test_u16_passwd_content_is_preserved():

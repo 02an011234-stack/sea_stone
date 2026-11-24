@@ -14,7 +14,10 @@ class TestU21Harden(MultiTargetHardenTestBase):
         actual = fixture["root"] / display.lstrip("/")
         actual.write_text(self.sensitive_marker, encoding="utf-8")
         with fixture["state"].open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(f"{display}|file|0|root|0|root|640|100|9999|200|300|?|safe|0|root|configuration\n")
+            stream.write(
+                f"{display}|file|0|root|0|root|640|100|9999|200|300|"
+                "system_u:object_r:etc_t:s0|safe|0|root|configuration\n"
+            )
 
 
 def test_u21_journald_only_is_no_change():

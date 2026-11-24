@@ -15,7 +15,10 @@ class TestU24Harden(MultiTargetHardenTestBase):
         actual = fixture["root"] / display.lstrip("/")
         actual.write_text(self.sensitive_marker, encoding="utf-8")
         with fixture["state"].open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(f"{display}|file|1000|user|0|root|640|100|9999|200|300|?|safe|1000|user|environment\n")
+            stream.write(
+                f"{display}|file|1000|user|0|root|640|100|9999|200|300|"
+                "system_u:object_r:etc_t:s0|safe|1000|user|environment\n"
+            )
 
 
 def test_u24_shared_home_owner_relationship_is_rejected():
