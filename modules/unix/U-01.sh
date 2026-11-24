@@ -10,11 +10,17 @@ item_id='U-01'
 distro=${OS_GUARD_DISTRO:-unknown}
 version_id=${OS_GUARD_VERSION_ID:-unknown}
 module_version=${OS_GUARD_MODULE_VERSION:-unknown}
-sshd_config='/etc/ssh/sshd_config'
-pam_login='/etc/pam.d/login'
-securetty='/etc/securetty'
-inetd_config='/etc/inetd.conf'
-xinetd_telnet_config='/etc/xinetd.d/telnet'
+test_root=${OS_GUARD_TEST_ROOT:-}
+sshd_config_display='/etc/ssh/sshd_config'
+pam_login_display='/etc/pam.d/login'
+securetty_display='/etc/securetty'
+inetd_config_display='/etc/inetd.conf'
+xinetd_telnet_config_display='/etc/xinetd.d/telnet'
+sshd_config="${test_root}${sshd_config_display}"
+pam_login="${test_root}${pam_login_display}"
+securetty="${test_root}${securetty_display}"
+inetd_config="${test_root}${inetd_config_display}"
+xinetd_telnet_config="${test_root}${xinetd_telnet_config_display}"
 observed_at=$(os_guard_utc_now)
 
 json_nullable_boolean() {
@@ -159,13 +165,15 @@ include_directives=''
 include_present=false
 match_condition_present='unknown'
 ssh_config_scan='unavailable'
-configuration_paths="$sshd_config
-$pam_login
-$securetty
-$inetd_config
-$xinetd_telnet_config"
+configuration_paths="$sshd_config_display
+$pam_login_display
+$securetty_display
+$inetd_config_display
+$xinetd_telnet_config_display"
 
-if [ -r "$sshd_config" ]; then
+if [ -n "$test_root" ] && [ -L "$sshd_config" ]; then
+    ssh_config_scan='unavailable'
+elif [ -r "$sshd_config" ]; then
     ssh_config_scan='complete'
     include_directives=$(awk '
         /^[[:space:]]*#/ { next }
@@ -191,17 +199,33 @@ if [ -r "$sshd_config" ]; then
 '
     for include_pattern in $include_directives; do
         IFS=$old_ifs
+        if [ -n "$test_root" ]; then
+            case "/$include_pattern/" in
+                */../*)
+                    ssh_config_scan='unavailable'
+                    match_condition_present='unknown'
+                    IFS='
+'
+                    continue
+                    ;;
+            esac
+        fi
         case "$include_pattern" in
-            /*) resolved_pattern=$include_pattern ;;
-            *) resolved_pattern="/etc/ssh/$include_pattern" ;;
+            /*) resolved_pattern="${test_root}${include_pattern}" ;;
+            *) resolved_pattern="${test_root}/etc/ssh/$include_pattern" ;;
         esac
         # Expansion is restricted to patterns read from the local OpenSSH config.
         # shellcheck disable=SC2086
         for include_path in $resolved_pattern; do
             [ -e "$include_path" ] || continue
+            include_display_path=$include_path
+            if [ -n "$test_root" ]; then
+                include_display_path=${include_path#"$test_root"}
+            fi
             configuration_paths="$configuration_paths
-$include_path"
-            if [ ! -r "$include_path" ]; then
+$include_display_path"
+            if { [ -n "$test_root" ] && [ -L "$include_path" ]; } || \
+                [ ! -r "$include_path" ]; then
                 ssh_config_scan='unavailable'
                 match_condition_present='unknown'
                 continue
@@ -226,6 +250,7 @@ ssh_units_json=$(printf '%s\n' "$ssh_units_lines" | os_guard_json_array_from_lin
 telnet_units_json=$(printf '%s\n' "$telnet_units_lines" | os_guard_json_array_from_lines)
 
 sshd_bin=''
+sshd_evidence=''
 permit_root_login=''
 permit_source='not_checked'
 ssh_restriction='not_applicable'
@@ -233,6 +258,10 @@ ssh_error=''
 
 if [ "$ssh_service_state" = 'active' ]; then
     sshd_bin=$(command -v sshd 2>/dev/null || true)
+    sshd_evidence=$sshd_bin
+    if [ -n "$test_root" ] && [ -n "$sshd_evidence" ]; then
+        sshd_evidence='fixture-local-sshd'
+    fi
     if [ -z "$sshd_bin" ] || [ ! -x "$sshd_bin" ]; then
         ssh_restriction='unknown'
         ssh_error='OPENSSH_EXECUTABLE_NOT_FOUND'
@@ -242,9 +271,20 @@ if [ "$ssh_service_state" = 'active' ]; then
     else
         host_name=$(hostname 2>/dev/null || printf 'localhost')
         [ -n "$host_name" ] || host_name='localhost'
-        if effective_output=$(
-            "$sshd_bin" -T -C "user=root,host=$host_name,addr=127.0.0.1" 2>/dev/null
-        ); then
+        if [ -n "$test_root" ]; then
+            effective_output=$(
+                "$sshd_bin" -T -f "$sshd_config" \
+                    -C "user=root,host=$host_name,addr=127.0.0.1" 2>/dev/null
+            )
+            effective_status=$?
+        else
+            effective_output=$(
+                "$sshd_bin" -T -C \
+                    "user=root,host=$host_name,addr=127.0.0.1" 2>/dev/null
+            )
+            effective_status=$?
+        fi
+        if [ "$effective_status" -eq 0 ]; then
             permit_root_login=$(printf '%s\n' "$effective_output" | awk '
                 tolower($1) == "permitrootlogin" { print tolower($2); exit }
             ')
@@ -388,7 +428,7 @@ json_nullable_boolean "$match_condition_present"
 printf ',"ssh_service_units":%s,' "$ssh_units_json"
 printf '"telnet_service_units":%s,' "$telnet_units_json"
 printf '"sshd_executable":'
-json_nullable_string "$sshd_bin"
+json_nullable_string "$sshd_evidence"
 printf ',"os":{"distro":'
 os_guard_json_quote "$distro"
 printf ',"version_id":'

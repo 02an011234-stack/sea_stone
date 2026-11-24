@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from os_guard_agent.manifest import ManifestError, load_manifest
 from os_guard_agent.models import Action, OsInfo, Task, TaskAuthorization
@@ -118,6 +121,58 @@ class ModuleRunnerTests(unittest.TestCase):
 
     def test_all_registered_items_are_implemented(self) -> None:
         self.assertTrue(all(item.implemented for item in self.runner.manifest.items.values()))
+
+    def test_check_subprocess_uses_sanitized_environment_not_parent_environment(self) -> None:
+        planned = self.runner.prepare_item("U-01", Action.CHECK)
+        completed = subprocess.CompletedProcess(
+            [str(planned.module_path)],
+            0,
+            json.dumps(
+                {
+                    "item_id": "U-01",
+                    "status": "GOOD",
+                    "review_state": "NOT_REQUIRED",
+                    "current_value": {},
+                    "evidence": {
+                        "item_id": "U-01",
+                        "module_version": "unix-2026.1",
+                        "os": {"distro": "rocky", "version_id": "9.4"},
+                    },
+                    "error": None,
+                }
+            ),
+            "",
+        )
+        hostile_parent_environment = {
+            "OS_GUARD_TEST_ROOT": "/tmp/hostile-root",
+            "OS_GUARD_TEST_U65_FILE": "/tmp/forged-policy",
+            "OS_GUARD_HARDEN_APPROVED": "true",
+            "PYTHONPATH": "/tmp/injected-python",
+            "LD_PRELOAD": "/tmp/injected-library.so",
+        }
+        with (
+            patch.dict(os.environ, hostile_parent_environment, clear=False),
+            patch("os_guard_agent.module_runner.os.access", return_value=True),
+            patch(
+                "os_guard_agent.module_runner.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            self.runner.execute_check(planned)
+
+        child_environment = run.call_args.kwargs["env"]
+        self.assertEqual(
+            set(child_environment),
+            {
+                "PATH",
+                "LC_ALL",
+                "OS_GUARD_DISTRO",
+                "OS_GUARD_VERSION_ID",
+                "OS_GUARD_MODULE_VERSION",
+            },
+        )
+        for variable_name in hostile_parent_environment:
+            self.assertNotIn(variable_name, child_environment)
 
 
 if __name__ == "__main__":

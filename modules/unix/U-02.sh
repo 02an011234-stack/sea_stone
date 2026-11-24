@@ -10,26 +10,46 @@ distro=${OS_GUARD_DISTRO:-unknown}
 version_id=${OS_GUARD_VERSION_ID:-unknown}
 module_version=${OS_GUARD_MODULE_VERSION:-unknown}
 observed_at=$(os_guard_utc_now)
+test_root=${OS_GUARD_TEST_ROOT:-}
 
-login_defs='/etc/login.defs'
-pwquality_main='/etc/security/pwquality.conf'
-pwquality_dir='/etc/security/pwquality.conf.d'
-pwhistory_conf='/etc/security/pwhistory.conf'
+login_defs_display='/etc/login.defs'
+pwquality_main_display='/etc/security/pwquality.conf'
+pwquality_dir_display='/etc/security/pwquality.conf.d'
+pwhistory_conf_display='/etc/security/pwhistory.conf'
+login_defs="${test_root}${login_defs_display}"
+pwquality_main="${test_root}${pwquality_main_display}"
+pwquality_dir="${test_root}${pwquality_dir_display}"
+pwhistory_conf="${test_root}${pwhistory_conf_display}"
 
 case "$distro" in
     rocky)
-        pam_primary='/etc/pam.d/system-auth'
-        pam_secondary='/etc/pam.d/password-auth'
+        pam_primary_display='/etc/pam.d/system-auth'
+        pam_secondary_display='/etc/pam.d/password-auth'
         ;;
     ubuntu)
-        pam_primary='/etc/pam.d/common-password'
-        pam_secondary=''
+        pam_primary_display='/etc/pam.d/common-password'
+        pam_secondary_display=''
         ;;
     *)
-        pam_primary=''
-        pam_secondary=''
+        pam_primary_display=''
+        pam_secondary_display=''
         ;;
 esac
+pam_primary="${test_root}${pam_primary_display}"
+if [ -n "$pam_secondary_display" ]; then
+    pam_secondary="${test_root}${pam_secondary_display}"
+else
+    pam_secondary=''
+fi
+
+display_path() {
+    inspected_path=$1
+    if [ -n "$test_root" ]; then
+        printf '%s' "${inspected_path#"$test_root"}"
+    else
+        printf '%s' "$inspected_path"
+    fi
+}
 
 json_nullable_string() {
     if [ -n "$1" ]; then
@@ -216,12 +236,27 @@ if [ -z "$pam_primary" ]; then
     collection_error='UNSUPPORTED_OS_CONFIGURATION'
 fi
 
+if [ -n "$test_root" ]; then
+    for fixture_path in \
+        "$login_defs" "$pwquality_main" "$pwquality_dir" \
+        "$pwhistory_conf" "$pam_primary" "$pam_secondary"; do
+        [ -n "$fixture_path" ] || continue
+        if [ -L "$fixture_path" ]; then
+            collection_error='FIXTURE_SYMLINK_NOT_ALLOWED'
+        fi
+    done
+fi
+
 pwquality_files=''
 if [ -d "$pwquality_dir" ] && [ ! -r "$pwquality_dir" ]; then
     collection_error='POLICY_DIRECTORY_UNREADABLE'
 fi
 for policy_file in "$pwquality_dir"/*.conf; do
     [ -e "$policy_file" ] || continue
+    if [ -n "$test_root" ] && [ -L "$policy_file" ]; then
+        collection_error='FIXTURE_SYMLINK_NOT_ALLOWED'
+        continue
+    fi
     if [ ! -r "$policy_file" ]; then
         collection_error='POLICY_FILE_UNREADABLE'
         continue
@@ -472,14 +507,14 @@ elif [ -n "$pending_messages" ]; then
     decision_reason='The effective password policy cannot be determined safely from the detected PAM structure'
 fi
 
-checked_paths="$login_defs
-$pwquality_main
-$pwquality_dir/*.conf
-$pwhistory_conf"
-if [ -n "$pam_primary" ]; then checked_paths="$checked_paths
-$pam_primary"; fi
-if [ -n "$pam_secondary" ]; then checked_paths="$checked_paths
-$pam_secondary"; fi
+checked_paths="$login_defs_display
+$pwquality_main_display
+$pwquality_dir_display/*.conf
+$pwhistory_conf_display"
+if [ -n "$pam_primary_display" ]; then checked_paths="$checked_paths
+$pam_primary_display"; fi
+if [ -n "$pam_secondary_display" ]; then checked_paths="$checked_paths
+$pam_secondary_display"; fi
 
 paths_json=$(printf '%s\n' "$checked_paths" | os_guard_json_array_from_lines)
 failures_json=$(printf '%s\n' "$policy_messages" | os_guard_json_array_from_lines)
@@ -489,8 +524,17 @@ printf '{'
 printf '"item_id":"U-02",'
 printf '"status":%s,' "$status_json"
 printf '"review_state":"%s",' "$review_state"
+minlen_source_display=$(display_path "$minlen_source")
+dcredit_source_display=$(display_path "$dcredit_source")
+ucredit_source_display=$(display_path "$ucredit_source")
+lcredit_source_display=$(display_path "$lcredit_source")
+ocredit_source_display=$(display_path "$ocredit_source")
+remember_source_display=$(display_path "$remember_source")
+pwquality_root_source_display=$(display_path "$pwquality_root_source")
+pwhistory_root_source_display=$(display_path "$pwhistory_root_source")
+
 printf '"current_value":{'
-printf '"min_length":{"value":'; json_nullable_number "$minlen"; printf ',"source":'; json_nullable_string "$minlen_source"; printf '},'
+printf '"min_length":{"value":'; json_nullable_number "$minlen"; printf ',"source":'; json_nullable_string "$minlen_source_display"; printf '},'
 printf '"character_requirements":{'
 printf '"dcredit":'; json_nullable_number "$dcredit"
 printf ',"ucredit":'; json_nullable_number "$ucredit"
@@ -499,10 +543,10 @@ printf ',"ocredit":'; json_nullable_number "$ocredit"
 printf '},"pass_min_days":'; json_nullable_number "$pass_min_days"
 printf ',"pass_max_days":'; json_nullable_number "$pass_max_days"
 printf ',"password_history":{"remember":'; json_nullable_number "$remember"
-printf ',"source":'; json_nullable_string "$remember_source"
+printf ',"source":'; json_nullable_string "$remember_source_display"
 printf '},"root_enforcement":{"pwquality":%s,"pwhistory":%s},' "$pwquality_root" "$pwhistory_root"
 printf '"pam":{'
-printf '"configuration_path":'; json_nullable_string "$pam_primary"
+printf '"configuration_path":'; json_nullable_string "$pam_primary_display"
 printf ',"pam_pwquality_present":'; [ "$pwquality_count" -gt 0 ] && printf 'true' || printf 'false'
 printf ',"pam_pwhistory_present":'; [ "$pwhistory_count" -gt 0 ] && printf 'true' || printf 'false'
 printf ',"pam_unix_present":'; [ "$pam_unix_count" -gt 0 ] && printf 'true' || printf 'false'
@@ -517,14 +561,14 @@ printf '"item_id":"U-02",'
 printf '"collection_method":"Read login.defs, resolve libpwquality and pwhistory configuration precedence, and inspect the active PAM password stack",'
 printf '"configuration_paths":%s,' "$paths_json"
 printf '"effective_value_sources":{'
-printf '"minlen":'; json_nullable_string "$minlen_source"
-printf ',"dcredit":'; json_nullable_string "$dcredit_source"
-printf ',"ucredit":'; json_nullable_string "$ucredit_source"
-printf ',"lcredit":'; json_nullable_string "$lcredit_source"
-printf ',"ocredit":'; json_nullable_string "$ocredit_source"
-printf ',"remember":'; json_nullable_string "$remember_source"
-printf ',"pwquality_root":'; json_nullable_string "$pwquality_root_source"
-printf ',"pwhistory_root":'; json_nullable_string "$pwhistory_root_source"
+printf '"minlen":'; json_nullable_string "$minlen_source_display"
+printf ',"dcredit":'; json_nullable_string "$dcredit_source_display"
+printf ',"ucredit":'; json_nullable_string "$ucredit_source_display"
+printf ',"lcredit":'; json_nullable_string "$lcredit_source_display"
+printf ',"ocredit":'; json_nullable_string "$ocredit_source_display"
+printf ',"remember":'; json_nullable_string "$remember_source_display"
+printf ',"pwquality_root":'; json_nullable_string "$pwquality_root_source_display"
+printf ',"pwhistory_root":'; json_nullable_string "$pwhistory_root_source_display"
 printf '},"criteria_failures":%s,' "$failures_json"
 printf '"review_reasons":%s,' "$pending_json"
 printf '"reason_code":'; os_guard_json_quote "$reason_code"
