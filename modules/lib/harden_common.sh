@@ -891,3 +891,27 @@ os_guard_harden_run_file_module() {
     os_guard_harden_execute_file_changes || true
     os_guard_harden_build_file_result
 }
+
+# Fixture policies are intentionally limited to bounded IPv4 CIDRs until the
+# signed policy-to-HARDEN bridge can pass the Python policy verifier's IPv6
+# objects without lossy shell parsing.
+os_guard_harden_ipv4_cidr_is_bounded() {
+    candidate_network=$1
+    printf '%s\n' "$candidate_network" | awk -F/ '
+        NF != 2 || $2 !~ /^[0-9]+$/ || $2 < 1 || $2 > 32 {
+            exit 1
+        }
+        {
+            octet_count=split($1, octets, ".")
+            if (octet_count != 4) {
+                exit 1
+            }
+            for (octet_index=1; octet_index<=4; octet_index++) {
+                if (octets[octet_index] !~ /^[0-9]+$/ ||
+                    octets[octet_index] < 0 || octets[octet_index] > 255) {
+                    exit 1
+                }
+            }
+        }
+    '
+}
