@@ -13,9 +13,16 @@ from types import SimpleNamespace
 import pytest
 
 import os_guard_agent.installer as installer_module
-from os_guard_agent.installer import InstallError, UnixInstaller, _parser
+from os_guard_agent.ca_trust import verify_ca_fingerprint
+from os_guard_agent.installer import (
+    InstallError,
+    UnixInstaller,
+    _cryptography_version_is_supported,
+    _parser,
+)
 from os_guard_agent.models import OperatingCredential
 from os_guard_agent.token_store import TokenStore
+from test_ca_trust import write_certificate
 
 
 ROOT = Path(__file__).parents[1]
@@ -26,6 +33,7 @@ def write_registration(
     path: Path,
     *,
     url: str = "https://central.example.test/agent-api/v2",
+    ca_fingerprint: str = "a" * 64,
 ) -> None:
     document = {
         "enrollment_id": "enrollment-fixture",
@@ -35,11 +43,22 @@ def write_registration(
         "family": "UNIX",
         "schema_version": "2.0",
         "central_server_url": url,
-        "ca_sha256_fingerprint": "a" * 64,
+        "ca_sha256_fingerprint": ca_fingerprint,
         "enrollment_header": "X-Enrollment-Token",
     }
     path.write_text(json.dumps(document), encoding="utf-8")
     path.chmod(0o600)
+
+
+def write_registration_with_ca(
+    path: Path,
+    *,
+    url: str = "https://central.example.test/agent-api/v2",
+) -> Path:
+    ca_path = path.parent / "os-guard-ca.crt"
+    fingerprint = write_certificate(ca_path)
+    write_registration(path, url=url, ca_fingerprint=fingerprint)
+    return ca_path
 
 
 def prepare_root(tmp_path: Path, distro: str = "ubuntu", version: str = "24.04") -> Path:
@@ -50,6 +69,27 @@ def prepare_root(tmp_path: Path, distro: str = "ubuntu", version: str = "24.04")
         encoding="utf-8",
     )
     return root
+
+
+def prepare_server_bundle(tmp_path: Path) -> tuple[Path, Path, str]:
+    source = tmp_path / "server-bundle"
+    for directory in ("src", "modules", "config", "packaging"):
+        shutil.copytree(ROOT / directory, source / directory)
+    for filename in ("pyproject.toml", "install.sh"):
+        shutil.copy2(ROOT / filename, source / filename)
+
+    registration_directory = source / "registration"
+    trust_directory = source / "trust"
+    wheelhouse = source / "wheelhouse"
+    registration_directory.mkdir()
+    trust_directory.mkdir()
+    wheelhouse.mkdir()
+    (wheelhouse / "cryptography-41.0.7-py3-none-any.whl").write_bytes(b"fixture")
+    ca_path = trust_directory / "os-guard-ca.crt"
+    fingerprint = write_certificate(ca_path)
+    registration_path = registration_directory / "registration.json"
+    write_registration(registration_path, ca_fingerprint=fingerprint)
+    return source, registration_path, fingerprint
 
 
 def registration_fixture_installer(root: Path, **kwargs) -> UnixInstaller:
@@ -92,30 +132,40 @@ def test_installer_builds_local_service_layout(tmp_path, distro, version):
     assert not (root / "usr/libexec/os-guard-check-helper").exists()
 
 
-def test_system_site_virtual_environment_can_import_cryptography_without_download(
-    tmp_path,
-):
-    virtual_environment = tmp_path / "venv"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "venv",
-            "--system-site-packages",
-            str(virtual_environment),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    python_path = (
-        virtual_environment / "Scripts/python.exe"
-        if os.name == "nt"
-        else virtual_environment / "bin/python"
-    )
+@pytest.mark.parametrize(
+    ("version", "supported"),
+    (
+        ("3.4.8", False),
+        ("40.0.2", False),
+        ("41.0.0", True),
+        ("41.0.7", True),
+        ("42.0.0", True),
+        ("41.0.0rc1", False),
+        ("invalid", False),
+    ),
+)
+def test_cryptography_runtime_version_floor(version, supported):
+    assert _cryptography_version_is_supported(version) is supported
+
+
+def test_installer_help_bootstraps_without_tomllib_or_tomli():
+    bootstrap = """
+import importlib.abc
+import sys
+
+class BlockTomlModules(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"tomli", "tomllib"}:
+            raise ModuleNotFoundError(f"blocked bootstrap dependency: {fullname}")
+        return None
+
+sys.meta_path.insert(0, BlockTomlModules())
+sys.path.insert(0, sys.argv[1])
+from os_guard_agent.installer import main
+main(["--help"])
+"""
     completed = subprocess.run(
-        [str(python_path), "-c", "import cryptography"],
+        [sys.executable, "-c", bootstrap, str(ROOT / "src")],
         check=False,
         capture_output=True,
         text=True,
@@ -123,6 +173,131 @@ def test_system_site_virtual_environment_can_import_cryptography_without_downloa
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert "--wheelhouse" in completed.stdout
+    assert "--registration-file" in completed.stdout
+
+
+def test_runtime_uses_isolated_venv_and_offline_wheelhouse(tmp_path):
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / "cryptography-41.0.7-py3-none-any.whl").write_bytes(b"fixture")
+    installer = UnixInstaller(ROOT, root=prepare_root(tmp_path), test_mode=True)
+
+    resolved_wheelhouse = installer._resolve_wheelhouse(wheelhouse)
+    venv_command = installer._virtual_environment_command()
+    install_command = installer._dependency_install_command(
+        "/opt/os-guard-agent/.venv/bin/python",
+        resolved_wheelhouse,
+    )
+
+    assert "--system-site-packages" not in venv_command
+    assert "--no-index" in install_command
+    assert "--only-binary=:all:" in install_command
+    assert str(resolved_wheelhouse) in install_command
+    assert "/opt/os-guard-agent/runtime-requirements.txt" in install_command
+
+    config_command = installer._configuration_validation_command(
+        "/etc/os-guard-agent/agent.toml",
+        "https://central.example.test/agent-api/v2/",
+    )
+    assert config_command[0] == "/opt/os-guard-agent/.venv/bin/python"
+    assert config_command[-1] == "https://central.example.test/agent-api/v2"
+
+
+def test_wheelhouse_rejects_missing_cryptography_and_symlinks(tmp_path):
+    root = prepare_root(tmp_path)
+    installer = UnixInstaller(ROOT, root=root, test_mode=True)
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / "tomli-2.0.1-py3-none-any.whl").write_bytes(b"fixture")
+    with pytest.raises(InstallError, match="missing cryptography"):
+        installer._resolve_wheelhouse(wheelhouse)
+
+    target = tmp_path / "cryptography-41.0.7-py3-none-any.whl"
+    target.write_bytes(b"fixture")
+    symlink = wheelhouse / target.name
+    try:
+        symlink.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises(InstallError, match="unsafe entry"):
+        installer._resolve_wheelhouse(wheelhouse)
+
+
+def test_runtime_install_failure_prevents_systemd_configuration(tmp_path, monkeypatch):
+    root = prepare_root(tmp_path)
+    installer = UnixInstaller(ROOT, root=root, test_mode=True)
+    systemd_called = False
+
+    def fail_runtime(_wheelhouse=None):
+        raise InstallError("offline dependency installation failed")
+
+    def record_systemd_call():
+        nonlocal systemd_called
+        systemd_called = True
+        return True, False
+
+    monkeypatch.setattr(installer, "_install_python_runtime", fail_runtime)
+    monkeypatch.setattr(installer, "_configure_systemd", record_systemd_call)
+
+    with pytest.raises(InstallError, match="offline dependency installation failed"):
+        installer.install()
+    assert systemd_called is False
+
+
+def test_server_bundle_auto_discovers_registration_wheelhouse_and_ca(tmp_path):
+    source, registration_path, fingerprint = prepare_server_bundle(tmp_path)
+    root = prepare_root(tmp_path / "host")
+
+    def command_runner(argv):
+        if "enroll" in argv:
+            TokenStore(root / "var/lib/os-guard-agent/credentials.json").save(
+                OperatingCredential(
+                    "server-fixture",
+                    "agent-fixture",
+                    "credential-fixture",
+                    "operating-secret",
+                    "2099-01-01T00:00:00Z",
+                )
+            )
+
+    installer = UnixInstaller(
+        source,
+        root=root,
+        test_mode=True,
+        fixture_registration_owner_uids={CURRENT_UID},
+        command_runner=command_runner,
+    )
+    result = installer.install()
+
+    assert result.outcome == "SUCCESS"
+    assert result.service_started is True
+    assert registration_path.exists() is False
+    installed_ca = root / "etc/os-guard-agent/os-guard-ca.crt"
+    assert installed_ca.is_file()
+    assert verify_ca_fingerprint(installed_ca, fingerprint) == fingerprint
+    config = (root / "etc/os-guard-agent/agent.toml").read_text(encoding="utf-8")
+    assert 'ca_cert_path = "/etc/os-guard-agent/os-guard-ca.crt"' in config
+
+
+def test_server_bundle_ca_mismatch_fails_before_payload_install(tmp_path):
+    source, _registration_path, _fingerprint = prepare_server_bundle(tmp_path)
+    registration_path = source / "registration/registration.json"
+    document = json.loads(registration_path.read_text(encoding="utf-8"))
+    document["ca_sha256_fingerprint"] = "0" * 64
+    registration_path.write_text(json.dumps(document), encoding="utf-8")
+    registration_path.chmod(0o600)
+    root = prepare_root(tmp_path / "host")
+    installer = UnixInstaller(
+        source,
+        root=root,
+        test_mode=True,
+        fixture_registration_owner_uids={CURRENT_UID},
+    )
+
+    with pytest.raises(InstallError, match="fingerprint does not match"):
+        installer.install()
+    assert not (root / "opt/os-guard-agent").exists()
 
 
 def test_systemd_unit_runs_as_unprivileged_account_and_is_sandboxed():
@@ -383,18 +558,29 @@ def test_manifest_remains_check_only_after_install(tmp_path):
     assert all(set(item["actions"]) == {"CHECK"} for item in manifest["items"])
 
 
-def test_requested_install_command_accepts_registration_file():
+def test_requested_install_command_accepts_registration_file_and_wheelhouse():
     parsed = _parser().parse_args(
-        ["--source", str(ROOT), "--registration-file", "/tmp/registration.json"]
+        [
+            "--source",
+            str(ROOT),
+            "--wheelhouse",
+            "/tmp/wheelhouse",
+            "--ca-certificate",
+            "/tmp/os-guard-ca.crt",
+            "--registration-file",
+            "/tmp/registration.json",
+        ]
     )
     assert parsed.action is None
     assert parsed.registration_file == Path("/tmp/registration.json")
+    assert parsed.wheelhouse == Path("/tmp/wheelhouse")
+    assert parsed.ca_certificate == Path("/tmp/os-guard-ca.crt")
 
 
 def test_install_enrolls_as_osguard_then_starts_service(tmp_path):
     root = prepare_root(tmp_path)
     registration_path = tmp_path / "registration.json"
-    write_registration(registration_path)
+    ca_path = write_registration_with_ca(registration_path)
     observed_commands: list[tuple[str, ...]] = []
 
     def command_runner(argv):
@@ -414,7 +600,7 @@ def test_install_enrolls_as_osguard_then_starts_service(tmp_path):
     result = registration_fixture_installer(
         root,
         command_runner=command_runner,
-    ).install(registration_file=registration_path)
+    ).install(registration_file=registration_path, ca_certificate=ca_path)
 
     assert result.outcome == "SUCCESS"
     assert result.service_started is True
@@ -437,7 +623,7 @@ def test_enrollment_failure_retains_registration_and_does_not_start_service(
 ):
     root = prepare_root(tmp_path)
     registration_path = tmp_path / "registration.json"
-    write_registration(registration_path)
+    ca_path = write_registration_with_ca(registration_path)
 
     def command_runner(argv):
         if "enroll" in argv:
@@ -446,7 +632,7 @@ def test_enrollment_failure_retains_registration_and_does_not_start_service(
     result = registration_fixture_installer(
         root,
         command_runner=command_runner,
-    ).install(registration_file=registration_path)
+    ).install(registration_file=registration_path, ca_certificate=ca_path)
 
     assert result.outcome == "FAILED"
     assert result.service_enabled is True
@@ -463,12 +649,12 @@ def test_credential_storage_failure_is_reported_without_consuming_registration(
 ):
     root = prepare_root(tmp_path)
     registration_path = tmp_path / "registration.json"
-    write_registration(registration_path)
+    ca_path = write_registration_with_ca(registration_path)
 
     result = registration_fixture_installer(
         root,
         command_runner=lambda _argv: None,
-    ).install(registration_file=registration_path)
+    ).install(registration_file=registration_path, ca_certificate=ca_path)
 
     assert result.outcome == "FAILED"
     assert result.service_started is False
@@ -482,7 +668,7 @@ def test_service_activation_failure_preserves_credential_after_registration_cons
 ):
     root = prepare_root(tmp_path)
     registration_path = tmp_path / "registration.json"
-    write_registration(registration_path)
+    ca_path = write_registration_with_ca(registration_path)
 
     def command_runner(argv):
         if "enroll" in argv:
@@ -505,7 +691,10 @@ def test_service_activation_failure_preserves_credential_after_registration_cons
         "_start_service",
         lambda: (_ for _ in ()).throw(InstallError("fixture service failure")),
     )
-    result = installer.install(registration_file=registration_path)
+    result = installer.install(
+        registration_file=registration_path,
+        ca_certificate=ca_path,
+    )
 
     assert result.outcome == "FAILED"
     assert result.service_started is False
@@ -526,7 +715,7 @@ def test_existing_credential_prevents_duplicate_enrollment_and_preserves_input(t
     TokenStore(credential_path).save(credential)
     original_bytes = credential_path.read_bytes()
     registration_path = tmp_path / "registration.json"
-    write_registration(
+    ca_path = write_registration_with_ca(
         registration_path,
         url="https://os-guard.example.com/agent-api/v2",
     )
@@ -535,7 +724,7 @@ def test_existing_credential_prevents_duplicate_enrollment_and_preserves_input(t
     result = registration_fixture_installer(
         root,
         command_runner=lambda argv: observed_commands.append(tuple(argv)),
-    ).install(registration_file=registration_path)
+    ).install(registration_file=registration_path, ca_certificate=ca_path)
 
     assert result.outcome == "SUCCESS"
     assert result.service_started is True

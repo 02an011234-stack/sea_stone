@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Sequence
 from urllib.parse import urlparse
 
+from .ca_trust import CaTrustError, create_verified_ssl_context
 from .config import ConfigError, load_config
 from .os_detect import detect_os
 from .outbox import OutboxError, OutboxStore
@@ -551,13 +552,11 @@ class LocalPreflight:
             "credential path exists; ownership, permissions, and content are evaluated separately",
         )
 
-    def _probe_tls(self, url: str) -> ProbeResult:
+    def _probe_tls(self, url: str, ca_cert_path: Path | None) -> ProbeResult:
         parsed = urlparse(url)
         try:
-            context = ssl.create_default_context()
-            if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
-                raise ssl.SSLError
-        except (OSError, ssl.SSLError):
+            context = create_verified_ssl_context(ca_cert_path)
+        except CaTrustError:
             return _result(
                 "LOCAL_CA_TRUST",
                 "FAIL",
@@ -671,7 +670,10 @@ class LocalPreflight:
             self._probe_tls(
                 config.central_server_url
                 if config
-                else "https://invalid.local/agent-api/v2"
+                else "https://invalid.local/agent-api/v2",
+                self._path(config.ca_cert_path)
+                if config and config.ca_cert_path is not None
+                else None,
             )
         )
         probes.extend(self._probe_disk_and_time(state_path))

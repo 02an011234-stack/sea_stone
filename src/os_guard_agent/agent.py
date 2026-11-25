@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from . import MODULE_VERSION, __version__
 from .api_client import ApiClient, ApiClientError, HeartbeatError
+from .ca_trust import CaTrustError, create_verified_ssl_context
 from .config import AgentConfig
 from .check_transport import (
     CheckTransportError,
@@ -46,6 +47,17 @@ class Agent:
         self.claimed_task: Task | None = None
         self.execution_plan: ExecutionPlan | None = None
 
+    def _api_client(self) -> ApiClient:
+        try:
+            context = create_verified_ssl_context(self.config.ca_cert_path)
+        except CaTrustError as exc:
+            raise ApiClientError(str(exc)) from None
+        return ApiClient(
+            self.config.central_server_url,
+            self.config.request_timeout_seconds,
+            ssl_context=context,
+        )
+
     def enroll(
         self,
         enrollment_id: str,
@@ -58,10 +70,7 @@ class Agent:
             agent_version=__version__,
             os_info=os_info,
         )
-        credential = ApiClient(
-            self.config.central_server_url,
-            self.config.request_timeout_seconds,
-        ).enroll(enrollment_token, request)
+        credential = self._api_client().enroll(enrollment_token, request)
         if expected_server_id is not None and credential.server_id != expected_server_id:
             raise ApiClientError(
                 "Enrollment response server_id does not match registration file"
@@ -80,10 +89,7 @@ class Agent:
 
         store = TokenStore(self.config.token_store_path)
         previous = store.load()
-        client = ApiClient(
-            self.config.central_server_url,
-            self.config.request_timeout_seconds,
-        )
+        client = self._api_client()
         rotation = client.rotate_credential(previous)
         store.stage_rotation(
             previous,
@@ -135,10 +141,11 @@ class Agent:
         if not os_info.supported:
             LOGGER.warning("Unsupported OS: %s", os_info.unsupported_reason)
 
-        client = ApiClient(
-            self.config.central_server_url,
-            self.config.request_timeout_seconds,
-        )
+        try:
+            client = self._api_client()
+        except ApiClientError as exc:
+            LOGGER.error("Agent TLS trust unavailable: %s", exc)
+            return 1
         inventory = build_inventory(credential.agent_id, os_info)
         outbox = OutboxStore(self.config.outbox_path)
         try:

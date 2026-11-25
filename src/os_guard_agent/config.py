@@ -30,6 +30,7 @@ class AgentConfig:
     inventory_version: str = "unavailable"
     manifest_path: Path = Path("/opt/os-guard-agent/modules/manifest.json")
     outbox_path: Path = Path("/var/lib/os-guard-agent/outbox")
+    ca_cert_path: Path | None = None
 
 
 def _required_string(values: Mapping[str, Any], key: str) -> str:
@@ -100,6 +101,13 @@ def load_config(path: Path) -> AgentConfig:
     outbox_path = Path(
         str(agent.get("outbox_path", "/var/lib/os-guard-agent/outbox"))
     )
+    raw_ca_cert_path = agent.get("ca_cert_path", "")
+    if not isinstance(raw_ca_cert_path, str):
+        raise ConfigError("'ca_cert_path' must be a string")
+    normalized_ca_cert_path = raw_ca_cert_path.strip()
+    ca_cert_path = Path(normalized_ca_cert_path) if normalized_ca_cert_path else None
+    if ca_cert_path is not None and not normalized_ca_cert_path.startswith("/"):
+        raise ConfigError("'ca_cert_path' must be absolute when configured")
 
     return AgentConfig(
         central_server_url=central_server_url,
@@ -113,4 +121,5 @@ def load_config(path: Path) -> AgentConfig:
         inventory_version=inventory_version,
         manifest_path=manifest_path,
         outbox_path=outbox_path,
+        ca_cert_path=ca_cert_path,
     )

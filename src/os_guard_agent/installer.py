@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -18,8 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .config import ConfigError, load_config
-from .preflight import PreflightOptions, run_preflight
+from .ca_trust import CaTrustError, verify_ca_fingerprint
 from .registration import (
     RegistrationFile,
     RegistrationFileError,
@@ -40,6 +40,12 @@ SERVICE_USER = "osguard"
 SERVICE_GROUP = "osguard"
 UNIT_NAME = "os-guard-agent.service"
 CREDENTIAL_PATH = "/var/lib/os-guard-agent/credentials.json"
+CA_CERTIFICATE_PATH = "/etc/os-guard-agent/os-guard-ca.crt"
+BUNDLED_REGISTRATION = Path("registration/registration.json")
+BUNDLED_CA_CERTIFICATE = Path("trust/os-guard-ca.crt")
+BUNDLED_WHEELHOUSE = Path("wheelhouse")
+RUNTIME_REQUIREMENTS = Path("packaging/runtime-requirements.txt")
+MINIMUM_CRYPTOGRAPHY_VERSION = (41, 0, 0)
 
 
 class InstallError(RuntimeError):
@@ -58,6 +64,15 @@ class InstallResult:
 
 
 CommandRunner = Callable[[Sequence[str]], None]
+
+
+def _cryptography_version_is_supported(version: str) -> bool:
+    """Accept stable cryptography releases at or above the runtime floor."""
+
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:\.post\d+)?", version)
+    if match is None:
+        return False
+    return tuple(int(part) for part in match.groups()) >= MINIMUM_CRYPTOGRAPHY_VERSION
 
 
 def _run_command(argv: Sequence[str]) -> None:
@@ -143,6 +158,7 @@ class UnixInstaller:
             self.source / "packaging" / "systemd" / UNIT_NAME,
             self.source / "packaging" / "unix" / "os-guard-agent",
             self.source / "packaging" / "unix" / "os-guard-preflight",
+            self.source / RUNTIME_REQUIREMENTS,
             self.source / "pyproject.toml",
         )
         if any(not path.is_file() or path.is_symlink() for path in required):
@@ -250,7 +266,7 @@ class UnixInstaller:
             (
                 "/usr/bin/python3",
                 "-c",
-                "import sys, cryptography; "
+                "import sys, venv; "
                 "raise SystemExit(0 if sys.version_info >= (3, 9) else 1)",
             )
         )
@@ -276,6 +292,10 @@ class UnixInstaller:
         shutil.copytree(self.source / "src", destination / "src")
         shutil.copytree(self.source / "modules", destination / "modules")
         shutil.copy2(self.source / "pyproject.toml", destination / "pyproject.toml")
+        shutil.copy2(
+            self.source / RUNTIME_REQUIREMENTS,
+            destination / "runtime-requirements.txt",
+        )
         (destination / "bin").mkdir()
         shutil.copy2(
             self.source / "packaging" / "unix" / "os-guard-agent",
@@ -287,7 +307,115 @@ class UnixInstaller:
         )
         self._set_tree_modes(destination)
 
-    def _install_python_runtime(self) -> None:
+    def _resolve_wheelhouse(self, wheelhouse: Path | None) -> Path:
+        candidate = (
+            wheelhouse
+            if wheelhouse is not None
+            else self.source / BUNDLED_WHEELHOUSE
+        )
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise InstallError(
+                "offline wheelhouse is required and must be a regular directory"
+            )
+        try:
+            entries = tuple(candidate.iterdir())
+        except OSError:
+            raise InstallError("offline wheelhouse cannot be inspected") from None
+        if any(entry.is_symlink() or not entry.is_file() for entry in entries):
+            raise InstallError("offline wheelhouse contains an unsafe entry")
+        if any(entry.suffix.lower() != ".whl" for entry in entries):
+            raise InstallError("offline wheelhouse may contain only wheel files")
+        wheels = tuple(entry for entry in entries if entry.suffix.lower() == ".whl")
+        if not wheels:
+            raise InstallError("offline wheelhouse contains no wheel files")
+        if not any(entry.name.lower().startswith("cryptography-") for entry in wheels):
+            raise InstallError("offline wheelhouse is missing cryptography")
+        return candidate.resolve()
+
+    @staticmethod
+    def _virtual_environment_command() -> tuple[str, ...]:
+        return (
+            "/usr/bin/python3",
+            "-m",
+            "venv",
+            "/opt/os-guard-agent/.venv",
+        )
+
+    @staticmethod
+    def _dependency_install_command(
+        python_path: str,
+        wheelhouse: Path,
+    ) -> tuple[str, ...]:
+        return (
+            python_path,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--find-links",
+            str(wheelhouse),
+            "--only-binary=:all:",
+            "--disable-pip-version-check",
+            "--requirement",
+            "/opt/os-guard-agent/runtime-requirements.txt",
+        )
+
+    @staticmethod
+    def _runtime_validation_command(python_path: str) -> tuple[str, ...]:
+        validation_code = (
+            "from importlib.metadata import version; "
+            "import os_guard_agent; "
+            "from os_guard_agent.installer import _cryptography_version_is_supported; "
+            "raise SystemExit(0 if _cryptography_version_is_supported("
+            "version('cryptography')) else 1)"
+        )
+        return (python_path, "-c", validation_code)
+
+    @staticmethod
+    def _configuration_validation_command(
+        config_path: str,
+        expected_url: str,
+    ) -> tuple[str, ...]:
+        validation_code = (
+            "import sys; "
+            "from os_guard_agent.config import load_config; "
+            "configured = load_config(sys.argv[1]).central_server_url; "
+            "raise SystemExit(0 if configured == sys.argv[2] else 1)"
+        )
+        return (
+            "/opt/os-guard-agent/.venv/bin/python",
+            "-c",
+            validation_code,
+            config_path,
+            expected_url.rstrip("/"),
+        )
+
+    @staticmethod
+    def _ca_policy_validation_command(
+        ca_certificate: Path,
+        expected_sha256: str,
+    ) -> tuple[str, ...]:
+        validation_code = (
+            "import sys; "
+            "from pathlib import Path; "
+            "from os_guard_agent.ca_policy import validate_ca_certificate_policy; "
+            "validate_ca_certificate_policy(Path(sys.argv[1]), sys.argv[2])"
+        )
+        return (
+            "/opt/os-guard-agent/.venv/bin/python",
+            "-c",
+            validation_code,
+            str(ca_certificate),
+            expected_sha256,
+        )
+
+    def _bundled_input(self, explicit: Path | None, relative: Path) -> Path | None:
+        if explicit is not None:
+            return explicit
+        candidate = self.source / relative
+        return candidate if candidate.exists() else None
+
+    def _install_python_runtime(self, wheelhouse: Path | None = None) -> None:
         install_path = self._path("/opt/os-guard-agent")
         virtual_environment = install_path / ".venv"
         site_packages = (
@@ -307,26 +435,19 @@ class UnixInstaller:
                 encoding="utf-8",
             )
             return
-        self.command_runner(
-            (
-                "/usr/bin/python3",
-                "-m",
-                "venv",
-                "--system-site-packages",
-                "/opt/os-guard-agent/.venv",
-            )
-        )
+        resolved_wheelhouse = self._resolve_wheelhouse(wheelhouse)
+        self.command_runner(self._virtual_environment_command())
         site_packages.mkdir(parents=True, exist_ok=True)
         (site_packages / "os_guard_agent.pth").write_text(
             "/opt/os-guard-agent/src\n",
             encoding="utf-8",
         )
+        runtime_python = "/opt/os-guard-agent/.venv/bin/python"
         self.command_runner(
-            (
-                "/opt/os-guard-agent/.venv/bin/python",
-                "-c",
-                "import os_guard_agent, cryptography",
-            )
+            self._dependency_install_command(runtime_python, resolved_wheelhouse)
+        )
+        self.command_runner(
+            self._runtime_validation_command(runtime_python)
         )
 
     def _recover_interrupted_payload(self, install_path: Path, backup: Path) -> None:
@@ -400,10 +521,77 @@ class UnixInstaller:
         lines[matches[0]] = replacement
         config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    @staticmethod
+    def _configure_ca_path(config_path: Path) -> None:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+        replacement = f"ca_cert_path = {json.dumps(CA_CERTIFICATE_PATH)}"
+        matches = [
+            index
+            for index, line in enumerate(lines)
+            if line.strip().startswith("ca_cert_path")
+        ]
+        if len(matches) > 1:
+            raise InstallError("Agent configuration CA path is invalid")
+        if matches:
+            lines[matches[0]] = replacement
+        else:
+            lines.append(replacement)
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _install_ca_certificate(
+        self,
+        source_path: Path,
+        expected_sha256: str,
+        service_gid: int | None,
+    ) -> None:
+        destination = self._path(CA_CERTIFICATE_PATH)
+        self._reject_symlink_components(destination.parent)
+        if destination.is_symlink():
+            raise InstallError("Agent CA certificate path is unsafe")
+        if destination.exists():
+            try:
+                verify_ca_fingerprint(destination, expected_sha256)
+            except CaTrustError:
+                raise InstallError(
+                    "existing Agent CA does not match registration"
+                ) from None
+            return
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".os-guard-ca.",
+            suffix=".crt",
+            dir=destination.parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with source_path.open("rb") as source_file, os.fdopen(
+                descriptor, "wb"
+            ) as output:
+                shutil.copyfileobj(source_file, output)
+                output.flush()
+                os.fsync(output.fileno())
+            temporary_path.chmod(0o644)
+            try:
+                verify_ca_fingerprint(temporary_path, expected_sha256)
+            except CaTrustError:
+                raise InstallError("staged Agent CA validation failed") from None
+            if not self.test_mode and service_gid is not None:
+                os.chown(temporary_path, 0, service_gid)
+            os.replace(temporary_path, destination)
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            temporary_path.unlink(missing_ok=True)
+            raise
+
     def _install_configuration(
         self,
         service_gid: int | None,
         central_server_url: str | None = None,
+        ca_certificate: Path | None = None,
+        ca_fingerprint: str | None = None,
     ) -> None:
         config_directory = self._path("/etc/os-guard-agent")
         self._reject_symlink_components(config_directory)
@@ -416,18 +604,44 @@ class UnixInstaller:
                 self._configure_central_url(config_path, central_server_url)
         if config_path.is_symlink() or not config_path.is_file():
             raise InstallError("Agent configuration path is unsafe")
+        if ca_certificate is not None:
+            self._configure_ca_path(config_path)
         config_path.chmod(0o640)
         if not self.test_mode and service_gid is not None:
             os.chown(config_directory, 0, service_gid)
             os.chown(config_path, 0, service_gid)
+        if ca_certificate is not None:
+            if ca_fingerprint is None:
+                raise InstallError("registration CA fingerprint is unavailable")
+            self._install_ca_certificate(
+                ca_certificate,
+                ca_fingerprint,
+                service_gid,
+            )
         if central_server_url is not None:
-            try:
-                configured_url = load_config(config_path).central_server_url
-            except ConfigError:
-                raise InstallError("Agent configuration cannot be validated") from None
-            if configured_url != central_server_url.rstrip("/"):
-                raise InstallError(
-                    "registration Central URL does not match existing configuration"
+            if self.test_mode:
+                try:
+                    from .config import ConfigError, load_config
+                except ModuleNotFoundError:
+                    raise InstallError(
+                        "Agent configuration cannot be validated"
+                    ) from None
+                try:
+                    configured_url = load_config(config_path).central_server_url
+                except ConfigError:
+                    raise InstallError(
+                        "Agent configuration cannot be validated"
+                    ) from None
+                if configured_url != central_server_url.rstrip("/"):
+                    raise InstallError(
+                        "registration Central URL does not match existing configuration"
+                    )
+            else:
+                self.command_runner(
+                    self._configuration_validation_command(
+                        "/etc/os-guard-agent/agent.toml",
+                        central_server_url,
+                    )
                 )
 
     def _install_state(self, service_uid: int | None, service_gid: int | None) -> None:
@@ -587,6 +801,8 @@ class UnixInstaller:
         service_gid: int | None,
     ) -> str:
         if self.test_mode:
+            from .preflight import PreflightOptions, run_preflight
+
             report = run_preflight(
                 PreflightOptions(
                     root=self.root,
@@ -614,22 +830,72 @@ class UnixInstaller:
             raise InstallError("osguard-context post-install Preflight failed")
         return str(local_status)
 
-    def install(self, *, registration_file: Path | None = None) -> InstallResult:
+    def install(
+        self,
+        *,
+        registration_file: Path | None = None,
+        wheelhouse: Path | None = None,
+        ca_certificate: Path | None = None,
+    ) -> InstallResult:
         self._validate_source()
         self._require_supported_host()
         self._require_runtime()
+        registration_file = self._bundled_input(
+            registration_file,
+            BUNDLED_REGISTRATION,
+        )
+        wheelhouse = self._bundled_input(wheelhouse, BUNDLED_WHEELHOUSE)
+        ca_certificate = self._bundled_input(
+            ca_certificate,
+            BUNDLED_CA_CERTIFICATE,
+        )
         registration = (
             self._load_install_registration(registration_file)
             if registration_file is not None
             else None
         )
+        if registration is not None:
+            if ca_certificate is None:
+                raise InstallError(
+                    "server-specific registration requires a bundled CA certificate"
+                )
+            try:
+                verify_ca_fingerprint(
+                    ca_certificate,
+                    registration.ca_sha256_fingerprint,
+                )
+            except CaTrustError as exc:
+                raise InstallError(f"registration CA rejected: {exc}") from None
         service_uid, service_gid = self._ensure_account()
         backup, previous_exists = self._install_payload()
         try:
-            self._install_python_runtime()
+            self._install_python_runtime(wheelhouse)
+            if registration is not None and ca_certificate is not None:
+                if self.test_mode:
+                    from .ca_policy import (
+                        CaPolicyError,
+                        validate_ca_certificate_policy,
+                    )
+
+                    try:
+                        validate_ca_certificate_policy(
+                            ca_certificate,
+                            registration.ca_sha256_fingerprint,
+                        )
+                    except CaPolicyError as exc:
+                        raise InstallError(f"registration CA rejected: {exc}") from None
+                else:
+                    self.command_runner(
+                        self._ca_policy_validation_command(
+                            ca_certificate,
+                            registration.ca_sha256_fingerprint,
+                        )
+                    )
             self._install_configuration(
                 service_gid,
                 registration.central_server_url if registration is not None else None,
+                ca_certificate if registration is not None else None,
+                registration.ca_sha256_fingerprint if registration is not None else None,
             )
             self._install_state(service_uid, service_gid)
             self._install_unit()
@@ -723,6 +989,8 @@ class UnixInstaller:
 
     def preflight(self, *, network: bool = False) -> InstallResult:
         if self.test_mode:
+            from .preflight import PreflightOptions, run_preflight
+
             report = run_preflight(
                 PreflightOptions(
                     root=self.root,
@@ -819,6 +1087,16 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="protected Central registration JSON used for one-time Enrollment",
     )
+    parser.add_argument(
+        "--wheelhouse",
+        type=Path,
+        help="trusted offline directory containing all runtime dependency wheels",
+    )
+    parser.add_argument(
+        "--ca-certificate",
+        type=Path,
+        help="trusted CA certificate matching the Registration DER fingerprint",
+    )
     subparsers = parser.add_subparsers(dest="action", required=False)
     subparsers.add_parser("install")
     preflight = subparsers.add_parser("preflight")
@@ -838,7 +1116,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             test_mode=args.test_mode,
         )
         if action == "install":
-            result = installer.install(registration_file=args.registration_file)
+            result = installer.install(
+                registration_file=args.registration_file,
+                wheelhouse=args.wheelhouse,
+                ca_certificate=args.ca_certificate,
+            )
         elif action == "preflight":
             result = installer.preflight(network=args.network)
         else:
