@@ -48,11 +48,12 @@ class TestU01OpenSshIntegration(CheckFixtureTestBase):
             newline="\n",
         )
         configuration = ssh_directory / "sshd_config"
+        include_pattern = (include_directory / "*.conf").as_posix()
         configuration.write_text(
             f"HostKey {host_key}\n"
             f"PidFile {root / 'sshd.pid'}\n"
             "UsePAM no\n"
-            "Include sshd_config.d/*.conf\n",
+            f"Include {include_pattern}\n",
             encoding="utf-8",
             newline="\n",
         )

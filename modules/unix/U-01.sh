@@ -38,6 +38,29 @@ json_nullable_string() {
     fi
 }
 
+fixture_path_has_symlink_component() (
+    candidate_path=$1
+    [ -n "$test_root" ] || exit 1
+    case "$candidate_path" in
+        "$test_root"|"$test_root"/*) ;;
+        *) exit 0 ;;
+    esac
+
+    relative_path=${candidate_path#"$test_root"}
+    relative_path=${relative_path#/}
+    current_path=$test_root
+    saved_ifs=$IFS
+    IFS=/
+    for path_component in $relative_path; do
+        IFS=$saved_ifs
+        [ -n "$path_component" ] || continue
+        current_path="$current_path/$path_component"
+        [ -L "$current_path" ] && exit 0
+        IFS=/
+    done
+    exit 1
+)
+
 probe_units() {
     probe_process=$1
     shift
@@ -211,9 +234,43 @@ elif [ -r "$sshd_config" ]; then
             esac
         fi
         case "$include_pattern" in
-            /*) resolved_pattern="${test_root}${include_pattern}" ;;
+            /*)
+                if [ -n "$test_root" ]; then
+                    case "$include_pattern" in
+                        "$test_root"/*) resolved_pattern=$include_pattern ;;
+                        *)
+                            ssh_config_scan='unavailable'
+                            match_condition_present='unknown'
+                            IFS='
+'
+                            continue
+                            ;;
+                    esac
+                else
+                    resolved_pattern=$include_pattern
+                fi
+                ;;
             *) resolved_pattern="${test_root}/etc/ssh/$include_pattern" ;;
         esac
+        if [ -n "$test_root" ]; then
+            resolved_parent=${resolved_pattern%/*}
+            case "$resolved_parent" in
+                *'*'*|*'?'*|*'['*)
+                    ssh_config_scan='unavailable'
+                    match_condition_present='unknown'
+                    IFS='
+'
+                    continue
+                    ;;
+            esac
+            if fixture_path_has_symlink_component "$resolved_parent"; then
+                ssh_config_scan='unavailable'
+                match_condition_present='unknown'
+                IFS='
+'
+                continue
+            fi
+        fi
         # Expansion is restricted to patterns read from the local OpenSSH config.
         # shellcheck disable=SC2086
         for include_path in $resolved_pattern; do
@@ -224,7 +281,8 @@ elif [ -r "$sshd_config" ]; then
             fi
             configuration_paths="$configuration_paths
 $include_display_path"
-            if { [ -n "$test_root" ] && [ -L "$include_path" ]; } || \
+            if { [ -n "$test_root" ] && \
+                 fixture_path_has_symlink_component "$include_path"; } || \
                 [ ! -r "$include_path" ]; then
                 ssh_config_scan='unavailable'
                 match_condition_present='unknown'
@@ -244,7 +302,15 @@ $include_display_path"
     IFS=$old_ifs
 fi
 
-include_json=$(printf '%s\n' "$include_directives" | os_guard_json_array_from_lines)
+include_json=$(
+    printf '%s\n' "$include_directives" | awk -v fixture_root="$test_root" '
+        fixture_root != "" && index($0, fixture_root "/") == 1 {
+            print substr($0, length(fixture_root) + 1)
+            next
+        }
+        { print }
+    ' | os_guard_json_array_from_lines
+)
 configuration_paths_json=$(printf '%s\n' "$configuration_paths" | os_guard_json_array_from_lines)
 ssh_units_json=$(printf '%s\n' "$ssh_units_lines" | os_guard_json_array_from_lines)
 telnet_units_json=$(printf '%s\n' "$telnet_units_lines" | os_guard_json_array_from_lines)

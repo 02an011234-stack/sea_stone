@@ -13,6 +13,7 @@ class TestU01CheckFixture(CheckFixtureTestBase):
         *,
         permit_root_login: str | None = "no",
         include: bool = False,
+        absolute_include: bool = False,
         match: bool = False,
     ):
         root = Path(temp_dir)
@@ -32,7 +33,10 @@ class TestU01CheckFixture(CheckFixtureTestBase):
                 encoding="utf-8",
                 newline="\n",
             )
-            configuration_lines.append("Include sshd_config.d/*.conf")
+            include_pattern = "sshd_config.d/*.conf"
+            if absolute_include:
+                include_pattern = f"{self.posix_path(include_directory)}/*.conf"
+            configuration_lines.append(f"Include {include_pattern}")
         elif permit_root_login is not None:
             configuration_lines.append(f"PermitRootLogin {permit_root_login}")
         if match:
@@ -145,6 +149,18 @@ printf 'permitrootlogin %s\n' "$value"
             self.assertTrue(result["evidence"]["include_present"])
             self.assertNotIn(self.posix_path(root), output)
 
+    def test_absolute_include_inside_fixture_is_allowed(self):
+        with self.temporary_directory() as temp_dir:
+            root, commands = self.create_fixture(
+                temp_dir,
+                include=True,
+                absolute_include=True,
+            )
+            result, output = self.run_fixture(root, commands)
+            self.assertEqual(result["status"], "GOOD")
+            self.assertEqual(result["current_value"]["ssh"]["permit_root_login"], "no")
+            self.assertNotIn(self.posix_path(root), output)
+
     def test_match_requires_review(self):
         with self.temporary_directory() as temp_dir:
             root, commands = self.create_fixture(temp_dir, match=True)
@@ -199,5 +215,56 @@ printf 'permitrootlogin %s\n' "$value"
                 encoding="utf-8",
                 newline="\n",
             )
+            result, _ = self.run_fixture(root, commands)
+            self.assertEqual(result["status"], "UNCHECKABLE")
+
+    def test_absolute_include_outside_fixture_is_uncheckable(self):
+        with self.temporary_directory() as temp_dir:
+            root, commands = self.create_fixture(temp_dir, permit_root_login=None)
+            (root / "etc/ssh/sshd_config").write_text(
+                "Include /etc/ssh/sshd_config.d/*.conf\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            result, _ = self.run_fixture(root, commands)
+            self.assertEqual(result["status"], "UNCHECKABLE")
+
+    def test_symlink_include_is_uncheckable(self):
+        with self.temporary_directory() as temp_dir:
+            root, commands = self.create_fixture(temp_dir, include=True)
+            include_directory = root / "etc/ssh/sshd_config.d"
+            policy = include_directory / "policy.conf"
+            target = include_directory / "policy-target.conf"
+            policy.replace(target)
+            try:
+                policy.symlink_to(target.name)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+            result, _ = self.run_fixture(root, commands)
+            self.assertEqual(result["status"], "UNCHECKABLE")
+
+    def test_symlink_include_directory_outside_fixture_is_uncheckable(self):
+        with (
+            self.temporary_directory() as temp_dir,
+            self.temporary_directory() as outside_dir,
+        ):
+            root, commands = self.create_fixture(temp_dir, include=True)
+            include_directory = root / "etc/ssh/sshd_config.d"
+            (include_directory / "policy.conf").unlink()
+            include_directory.rmdir()
+            outside_policy_directory = Path(outside_dir) / "policy"
+            outside_policy_directory.mkdir()
+            (outside_policy_directory / "policy.conf").write_text(
+                "PermitRootLogin no\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            try:
+                include_directory.symlink_to(
+                    outside_policy_directory,
+                    target_is_directory=True,
+                )
+            except OSError:
+                self.skipTest("directory symlink creation is unavailable")
             result, _ = self.run_fixture(root, commands)
             self.assertEqual(result["status"], "UNCHECKABLE")
