@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -30,6 +31,24 @@ def registration_document() -> dict:
     }
 
 
+def write_registration_file(
+    path: Path,
+    document: dict | None = None,
+    *,
+    mode: int = 0o600,
+) -> None:
+    payload = registration_document() if document is None else document
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.chmod(path, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor = -1
+            json.dump(payload, output, separators=(",", ":"))
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def write_config(path: Path, credential_path: Path) -> None:
     path.write_text(
         "\n".join(
@@ -49,7 +68,7 @@ def test_registration_file_enrolls_without_token_argv_and_is_removed_after_succe
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         registration_path = root / "registration.json"
-        registration_path.write_text(json.dumps(registration_document()), encoding="utf-8")
+        write_registration_file(registration_path)
         config_path = root / "agent.toml"
         write_config(config_path, root / "credentials.json")
 
@@ -86,7 +105,7 @@ def test_failed_enrollment_keeps_registration_file_for_explicit_recovery() -> No
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         registration_path = root / "registration.json"
-        registration_path.write_text(json.dumps(registration_document()), encoding="utf-8")
+        write_registration_file(registration_path)
         config_path = root / "agent.toml"
         write_config(config_path, root / "credentials.json")
         with (
@@ -116,7 +135,7 @@ def test_failed_preflight_does_not_read_or_consume_registration_file() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         registration_path = root / "registration.json"
-        registration_path.write_text(json.dumps(registration_document()), encoding="utf-8")
+        write_registration_file(registration_path)
         config_path = root / "agent.toml"
         write_config(config_path, root / "credentials.json")
         with (
@@ -155,12 +174,24 @@ def test_registration_url_family_expiry_and_fingerprint_are_validated() -> None:
         ):
             document = registration_document()
             document[key] = value
-            path.write_text(json.dumps(document), encoding="utf-8")
+            write_registration_file(path, document)
             with pytest.raises(RegistrationFileError):
                 load_registration_file(
                     path,
                     "https://central.example/agent-api/v2",
                 )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes are required")
+def test_registration_file_with_broad_permissions_is_rejected(tmp_path) -> None:
+    registration_path = tmp_path / "registration.json"
+    write_registration_file(registration_path, mode=0o644)
+
+    with pytest.raises(RegistrationFileError, match="permissions are too broad"):
+        load_registration_file(
+            registration_path,
+            "https://central.example/agent-api/v2",
+        )
 
 
 def test_cli_has_no_enrollment_token_argument() -> None:
