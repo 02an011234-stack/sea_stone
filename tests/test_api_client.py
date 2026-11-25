@@ -126,6 +126,18 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(context.check_hostname)
 
+    def test_tls_certificate_failure_is_sanitized_and_not_bypassed(self) -> None:
+        def opener(*_args, **_kwargs):
+            verification_error = ssl.SSLCertVerificationError("fixture CA unavailable")
+            raise urllib.error.URLError(verification_error)
+
+        client = ApiClient("https://central.example/agent-api/v2", opener=opener)
+        with self.assertRaises(EnrollmentError) as caught:
+            client.enroll("enrollment-secret", enrollment_request())
+
+        self.assertEqual(str(caught.exception), "enrollment connection failed")
+        self.assertNotIn("enrollment-secret", str(caught.exception))
+
     def test_bearer_authorization_header(self) -> None:
         credential = OperatingCredential("srv", "agt", "cred", "token-1", "expiry")
         self.assertEqual(

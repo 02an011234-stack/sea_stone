@@ -4,16 +4,37 @@ import json
 import os
 import shutil
 import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from os_guard_agent.installer import InstallError, UnixInstaller
+from os_guard_agent.installer import InstallError, UnixInstaller, _parser
 from os_guard_agent.models import OperatingCredential
 from os_guard_agent.token_store import TokenStore
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def write_registration(
+    path: Path,
+    *,
+    url: str = "https://central.example.test/agent-api/v2",
+) -> None:
+    document = {
+        "enrollment_id": "enrollment-fixture",
+        "token": "fixture-enrollment-token-not-a-real-secret",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "server_id": "server-fixture",
+        "family": "UNIX",
+        "schema_version": "2.0",
+        "central_server_url": url,
+        "ca_sha256_fingerprint": "a" * 64,
+        "enrollment_header": "X-Enrollment-Token",
+    }
+    path.write_text(json.dumps(document), encoding="utf-8")
+    path.chmod(0o600)
 
 
 def prepare_root(tmp_path: Path, distro: str = "ubuntu", version: str = "24.04") -> Path:
@@ -42,6 +63,13 @@ def test_installer_builds_local_service_layout(tmp_path, distro, version):
     assert "intentionally inactive pending enrollment" in result.message
     assert (root / "opt/os-guard-agent/src/os_guard_agent/__main__.py").is_file()
     assert (root / "opt/os-guard-agent/modules/manifest.json").is_file()
+    assert (root / "opt/os-guard-agent/.venv/bin/python").is_file()
+    assert list(
+        (root / "opt/os-guard-agent/.venv/lib").glob(
+            "python*/site-packages/os_guard_agent.pth"
+        )
+    )
+    assert (root / "opt/os-guard-agent/pyproject.toml").is_file()
     assert (root / "etc/os-guard-agent/agent.toml").is_file()
     assert (root / "etc/systemd/system/os-guard-agent.service").is_file()
     assert (root / "var/lib/os-guard-agent/outbox").is_dir()
@@ -91,6 +119,7 @@ def test_reinstall_preserves_configuration_credential_and_outbox(tmp_path):
     result = installer.install()
 
     assert result.outcome == "SUCCESS"
+    assert result.service_started is True
     assert "# customer-value" in config.read_text(encoding="utf-8")
     assert credential.read_bytes() == credential_bytes
     assert outbox_entry.read_text(encoding="utf-8") == "preserve-outbox-bytes"
@@ -140,6 +169,7 @@ def test_invalid_release_manifest_is_rejected_before_payload_replacement(tmp_pat
     release = tmp_path / "release"
     for directory in ("src", "modules", "config", "packaging"):
         shutil.copytree(ROOT / directory, release / directory)
+    shutil.copy2(ROOT / "pyproject.toml", release / "pyproject.toml")
     (release / "modules/manifest.json").write_text("{}", encoding="utf-8")
     root = prepare_root(tmp_path / "fixture")
 
@@ -303,3 +333,198 @@ def test_manifest_remains_check_only_after_install(tmp_path):
         (root / "opt/os-guard-agent/modules/manifest.json").read_text(encoding="utf-8")
     )
     assert all(set(item["actions"]) == {"CHECK"} for item in manifest["items"])
+
+
+def test_requested_install_command_accepts_registration_file():
+    parsed = _parser().parse_args(
+        ["--source", str(ROOT), "--registration-file", "/tmp/registration.json"]
+    )
+    assert parsed.action is None
+    assert parsed.registration_file == Path("/tmp/registration.json")
+
+
+def test_install_enrolls_as_osguard_then_starts_service(tmp_path):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+    observed_commands: list[tuple[str, ...]] = []
+
+    def command_runner(argv):
+        command = tuple(argv)
+        observed_commands.append(command)
+        if "enroll" in command:
+            TokenStore(root / "var/lib/os-guard-agent/credentials.json").save(
+                OperatingCredential(
+                    "server-fixture",
+                    "agent-fixture",
+                    "credential-fixture",
+                    "fixture-operating-token",
+                    "2099-01-01T00:00:00Z",
+                )
+            )
+
+    result = UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        command_runner=command_runner,
+    ).install(registration_file=registration_path)
+
+    assert result.outcome == "SUCCESS"
+    assert result.service_started is True
+    assert result.enrollment_required is False
+    assert not registration_path.exists()
+    assert any(
+        command[:4] == ("/usr/sbin/runuser", "--user", "osguard", "--")
+        and "enroll" in command
+        for command in observed_commands
+    )
+    config = (root / "etc/os-guard-agent/agent.toml").read_text(encoding="utf-8")
+    assert 'central_server_url = "https://central.example.test/agent-api/v2"' in config
+    assert "fixture-enrollment-token" not in config
+
+
+@pytest.mark.parametrize("failure_kind", ("authentication", "response-loss"))
+def test_enrollment_failure_retains_registration_and_does_not_start_service(
+    tmp_path,
+    failure_kind,
+):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+
+    def command_runner(argv):
+        if "enroll" in argv:
+            raise InstallError(f"fixture {failure_kind}")
+
+    result = UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        command_runner=command_runner,
+    ).install(registration_file=registration_path)
+
+    assert result.outcome == "FAILED"
+    assert result.service_enabled is True
+    assert result.service_started is False
+    assert result.enrollment_required is True
+    assert registration_path.exists()
+    assert not (root / "var/lib/os-guard-agent/credentials.json").exists()
+    assert not list((root / "var/lib/os-guard-agent").glob(".registration.*.json"))
+    assert "fixture-enrollment-token" not in result.message
+
+
+def test_credential_storage_failure_is_reported_without_consuming_registration(
+    tmp_path,
+):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+
+    result = UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        command_runner=lambda _argv: None,
+    ).install(registration_file=registration_path)
+
+    assert result.outcome == "FAILED"
+    assert result.service_started is False
+    assert registration_path.exists()
+    assert "valid operating credential" in result.message
+
+
+def test_service_activation_failure_preserves_credential_after_registration_consumption(
+    tmp_path,
+    monkeypatch,
+):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+
+    def command_runner(argv):
+        if "enroll" in argv:
+            TokenStore(root / "var/lib/os-guard-agent/credentials.json").save(
+                OperatingCredential(
+                    "server-fixture",
+                    "agent-fixture",
+                    "credential-fixture",
+                    "fixture-operating-token",
+                    "2099-01-01T00:00:00Z",
+                )
+            )
+
+    installer = UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        command_runner=command_runner,
+    )
+    monkeypatch.setattr(
+        installer,
+        "_start_service",
+        lambda: (_ for _ in ()).throw(InstallError("fixture service failure")),
+    )
+    result = installer.install(registration_file=registration_path)
+
+    assert result.outcome == "FAILED"
+    assert result.service_started is False
+    assert result.enrollment_required is False
+    assert not registration_path.exists()
+    stored = TokenStore(root / "var/lib/os-guard-agent/credentials.json").load()
+    assert stored.agent_id == "agent-fixture"
+
+
+def test_existing_credential_prevents_duplicate_enrollment_and_preserves_input(tmp_path):
+    root = prepare_root(tmp_path)
+    installer = UnixInstaller(ROOT, root=root, test_mode=True)
+    installer.install()
+    credential_path = root / "var/lib/os-guard-agent/credentials.json"
+    credential = OperatingCredential(
+        "server-1", "agent-1", "credential-1", "existing-secret", "expiry"
+    )
+    TokenStore(credential_path).save(credential)
+    original_bytes = credential_path.read_bytes()
+    registration_path = tmp_path / "registration.json"
+    write_registration(
+        registration_path,
+        url="https://os-guard.example.com/agent-api/v2",
+    )
+    observed_commands = []
+
+    result = UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        command_runner=lambda argv: observed_commands.append(tuple(argv)),
+    ).install(registration_file=registration_path)
+
+    assert result.outcome == "SUCCESS"
+    assert result.service_started is True
+    assert credential_path.read_bytes() == original_bytes
+    assert registration_path.exists()
+    assert not any("enroll" in command for command in observed_commands)
+
+
+@pytest.mark.parametrize("contents", ("{", "[]"))
+def test_invalid_registration_is_rejected_before_product_install(tmp_path, contents):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    registration_path.write_text(contents, encoding="utf-8")
+    registration_path.chmod(0o600)
+
+    with pytest.raises(InstallError, match="registration file rejected"):
+        UnixInstaller(ROOT, root=root, test_mode=True).install(
+            registration_file=registration_path
+        )
+
+    assert not (root / "opt/os-guard-agent").exists()
+
+
+def test_missing_registration_is_rejected_before_product_install(tmp_path):
+    root = prepare_root(tmp_path)
+    with pytest.raises(InstallError, match="registration file rejected"):
+        UnixInstaller(ROOT, root=root, test_mode=True).install(
+            registration_file=tmp_path / "missing.json"
+        )
+    assert not (root / "opt/os-guard-agent").exists()

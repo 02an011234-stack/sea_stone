@@ -18,7 +18,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .config import ConfigError, load_config
 from .preflight import PreflightOptions, run_preflight
+from .registration import (
+    RegistrationFile,
+    RegistrationFileError,
+    dispose_registration_file,
+    load_registration_file,
+)
+from .token_store import TokenStore, TokenStoreError
 
 try:
     import grp
@@ -31,6 +39,7 @@ except ImportError:  # pragma: no cover - Windows test host
 SERVICE_USER = "osguard"
 SERVICE_GROUP = "osguard"
 UNIT_NAME = "os-guard-agent.service"
+CREDENTIAL_PATH = "/var/lib/os-guard-agent/credentials.json"
 
 
 class InstallError(RuntimeError):
@@ -124,6 +133,7 @@ class UnixInstaller:
             self.source / "packaging" / "systemd" / UNIT_NAME,
             self.source / "packaging" / "unix" / "os-guard-agent",
             self.source / "packaging" / "unix" / "os-guard-preflight",
+            self.source / "pyproject.toml",
         )
         if any(not path.is_file() or path.is_symlink() for path in required):
             raise InstallError("release payload is incomplete or contains unsafe links")
@@ -255,6 +265,7 @@ class UnixInstaller:
     def _prepare_payload(self, destination: Path) -> None:
         shutil.copytree(self.source / "src", destination / "src")
         shutil.copytree(self.source / "modules", destination / "modules")
+        shutil.copy2(self.source / "pyproject.toml", destination / "pyproject.toml")
         (destination / "bin").mkdir()
         shutil.copy2(
             self.source / "packaging" / "unix" / "os-guard-agent",
@@ -265,6 +276,48 @@ class UnixInstaller:
             destination / "bin" / "os-guard-preflight",
         )
         self._set_tree_modes(destination)
+
+    def _install_python_runtime(self) -> None:
+        install_path = self._path("/opt/os-guard-agent")
+        virtual_environment = install_path / ".venv"
+        site_packages = (
+            virtual_environment
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+        if self.test_mode:
+            python_path = virtual_environment / "bin" / "python"
+            python_path.parent.mkdir(parents=True)
+            python_path.write_text("fixture Python runtime\n", encoding="utf-8")
+            python_path.chmod(0o755)
+            site_packages.mkdir(parents=True)
+            (site_packages / "os_guard_agent.pth").write_text(
+                "/opt/os-guard-agent/src\n",
+                encoding="utf-8",
+            )
+            return
+        self.command_runner(
+            (
+                "/usr/bin/python3",
+                "-m",
+                "venv",
+                "--system-site-packages",
+                "/opt/os-guard-agent/.venv",
+            )
+        )
+        site_packages.mkdir(parents=True, exist_ok=True)
+        (site_packages / "os_guard_agent.pth").write_text(
+            "/opt/os-guard-agent/src\n",
+            encoding="utf-8",
+        )
+        self.command_runner(
+            (
+                "/opt/os-guard-agent/.venv/bin/python",
+                "-c",
+                "import os_guard_agent, cryptography",
+            )
+        )
 
     def _recover_interrupted_payload(self, install_path: Path, backup: Path) -> None:
         if not backup.exists():
@@ -323,7 +376,25 @@ class UnixInstaller:
         except OSError:
             raise InstallError("installation failed and previous payload recovery failed") from None
 
-    def _install_configuration(self, service_gid: int | None) -> None:
+    @staticmethod
+    def _configure_central_url(config_path: Path, central_server_url: str) -> None:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+        replacement = f"central_server_url = {json.dumps(central_server_url)}"
+        matches = [
+            index
+            for index, line in enumerate(lines)
+            if line.strip().startswith("central_server_url")
+        ]
+        if len(matches) != 1:
+            raise InstallError("Agent configuration Central URL is invalid")
+        lines[matches[0]] = replacement
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _install_configuration(
+        self,
+        service_gid: int | None,
+        central_server_url: str | None = None,
+    ) -> None:
         config_directory = self._path("/etc/os-guard-agent")
         self._reject_symlink_components(config_directory)
         config_directory.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -331,12 +402,23 @@ class UnixInstaller:
         config_path = config_directory / "agent.toml"
         if not config_path.exists():
             shutil.copy2(self.source / "config" / "agent.toml.example", config_path)
+            if central_server_url is not None:
+                self._configure_central_url(config_path, central_server_url)
         if config_path.is_symlink() or not config_path.is_file():
             raise InstallError("Agent configuration path is unsafe")
         config_path.chmod(0o640)
         if not self.test_mode and service_gid is not None:
             os.chown(config_directory, 0, service_gid)
             os.chown(config_path, 0, service_gid)
+        if central_server_url is not None:
+            try:
+                configured_url = load_config(config_path).central_server_url
+            except ConfigError:
+                raise InstallError("Agent configuration cannot be validated") from None
+            if configured_url != central_server_url.rstrip("/"):
+                raise InstallError(
+                    "registration Central URL does not match existing configuration"
+                )
 
     def _install_state(self, service_uid: int | None, service_gid: int | None) -> None:
         for absolute, mode in (
@@ -374,12 +456,108 @@ class UnixInstaller:
             return True, False
         self.command_runner(("/usr/bin/systemctl", "daemon-reload"))
         self.command_runner(("/usr/bin/systemctl", "enable", UNIT_NAME))
-        credential_exists = self._path(
-            "/var/lib/os-guard-agent/credentials.json"
-        ).is_file()
-        if credential_exists:
-            self.command_runner(("/usr/bin/systemctl", "restart", UNIT_NAME))
-        return True, credential_exists
+        return True, False
+
+    @staticmethod
+    def _registration_owner_uids() -> set[int]:
+        owners = {0}
+        sudo_uid = os.environ.get("SUDO_UID", "")
+        if sudo_uid.isdecimal():
+            owners.add(int(sudo_uid))
+        return owners
+
+    def _load_install_registration(self, path: Path) -> RegistrationFile:
+        try:
+            return load_registration_file(
+                path,
+                None,
+                allowed_owner_uids=self._registration_owner_uids(),
+            )
+        except RegistrationFileError as exc:
+            raise InstallError(f"registration file rejected: {exc}") from None
+
+    def _stage_registration(
+        self,
+        source_path: Path,
+        service_uid: int | None,
+        service_gid: int | None,
+    ) -> Path:
+        state_directory = self._path("/var/lib/os-guard-agent")
+        self._reject_symlink_components(state_directory)
+        descriptor, name = tempfile.mkstemp(
+            prefix=".registration.",
+            suffix=".json",
+            dir=state_directory,
+        )
+        staged_path = Path(name)
+        try:
+            source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            source_descriptor = os.open(source_path, source_flags)
+            source_metadata = os.fstat(source_descriptor)
+            if not stat.S_ISREG(source_metadata.st_mode):
+                os.close(source_descriptor)
+                raise InstallError("registration source is not a regular file")
+            if os.name == "posix" and (
+                source_metadata.st_uid not in self._registration_owner_uids()
+                or stat.S_IMODE(source_metadata.st_mode) & 0o077
+            ):
+                os.close(source_descriptor)
+                raise InstallError("registration source ownership or permissions changed")
+            with os.fdopen(source_descriptor, "rb") as source_file, os.fdopen(
+                descriptor, "wb"
+            ) as output:
+                shutil.copyfileobj(source_file, output)
+                output.flush()
+                os.fsync(output.fileno())
+            staged_path.chmod(0o600)
+            if not self.test_mode and service_uid is not None and service_gid is not None:
+                os.chown(staged_path, service_uid, service_gid)
+            return staged_path
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            staged_path.unlink(missing_ok=True)
+            raise InstallError("registration file could not be staged safely") from None
+
+    def _enroll_from_registration(
+        self,
+        source_path: Path,
+        service_uid: int | None,
+        service_gid: int | None,
+    ) -> None:
+        staged_path = self._stage_registration(source_path, service_uid, service_gid)
+        runtime_path = (
+            str(staged_path)
+            if self.test_mode
+            else f"/var/lib/os-guard-agent/{staged_path.name}"
+        )
+        try:
+            self.command_runner(
+                (
+                    "/usr/sbin/runuser",
+                    "--user",
+                    SERVICE_USER,
+                    "--",
+                    "/opt/os-guard-agent/bin/os-guard-agent",
+                    "enroll",
+                    "--registration-file",
+                    runtime_path,
+                )
+            )
+            TokenStore(self._path(CREDENTIAL_PATH)).load()
+        except (InstallError, TokenStoreError):
+            raise InstallError(
+                "Enrollment did not produce a valid operating credential; registration was retained"
+            ) from None
+        finally:
+            staged_path.unlink(missing_ok=True)
+
+    def _start_service(self, *, restart: bool = False) -> None:
+        if not self.test_mode:
+            operation = "restart" if restart else "start"
+            self.command_runner(("/usr/bin/systemctl", operation, UNIT_NAME))
 
     def _run_post_install_preflight(
         self,
@@ -414,14 +592,23 @@ class UnixInstaller:
             raise InstallError("osguard-context post-install Preflight failed")
         return str(local_status)
 
-    def install(self) -> InstallResult:
+    def install(self, *, registration_file: Path | None = None) -> InstallResult:
         self._validate_source()
         self._require_supported_host()
         self._require_runtime()
+        registration = (
+            self._load_install_registration(registration_file)
+            if registration_file is not None
+            else None
+        )
         service_uid, service_gid = self._ensure_account()
         backup, previous_exists = self._install_payload()
         try:
-            self._install_configuration(service_gid)
+            self._install_python_runtime()
+            self._install_configuration(
+                service_gid,
+                registration.central_server_url if registration is not None else None,
+            )
             self._install_state(service_uid, service_gid)
             self._install_unit()
             service_enabled, service_started = self._configure_systemd()
@@ -435,9 +622,65 @@ class UnixInstaller:
             if isinstance(exc, InstallError):
                 raise
             raise InstallError("installation failed; previous payload was restored") from None
-        credential_exists = self._path(
-            "/var/lib/os-guard-agent/credentials.json"
-        ).is_file()
+        credential_exists = self._path(CREDENTIAL_PATH).is_file()
+        if registration_file is not None and not credential_exists:
+            try:
+                self._enroll_from_registration(
+                    registration_file,
+                    service_uid,
+                    service_gid,
+                )
+                credential_exists = True
+            except InstallError as exc:
+                credential_exists = self._path(CREDENTIAL_PATH).is_file()
+                return InstallResult(
+                    action="INSTALL",
+                    outcome="FAILED",
+                    service_enabled=service_enabled,
+                    service_started=False,
+                    enrollment_required=not credential_exists,
+                    preflight_status=preflight_status,
+                    message=str(exc),
+                )
+            try:
+                dispose_registration_file(registration_file)
+            except RegistrationFileError as exc:
+                return InstallResult(
+                    action="INSTALL",
+                    outcome="FAILED",
+                    service_enabled=service_enabled,
+                    service_started=False,
+                    enrollment_required=False,
+                    preflight_status=preflight_status,
+                    message=f"credential stored but registration disposal failed: {exc}",
+                )
+            try:
+                self._start_service()
+                service_started = True
+            except InstallError as exc:
+                return InstallResult(
+                    action="INSTALL",
+                    outcome="FAILED",
+                    service_enabled=service_enabled,
+                    service_started=False,
+                    enrollment_required=False,
+                    preflight_status=preflight_status,
+                    message=f"credential stored but service activation failed: {exc}",
+                )
+        elif credential_exists:
+            try:
+                self._start_service(restart=True)
+                service_started = True
+            except InstallError as exc:
+                return InstallResult(
+                    action="INSTALL",
+                    outcome="FAILED",
+                    service_enabled=service_enabled,
+                    service_started=False,
+                    enrollment_required=False,
+                    preflight_status=preflight_status,
+                    message=f"existing credential preserved but service restart failed: {exc}",
+                )
         return InstallResult(
             action="INSTALL",
             outcome="SUCCESS",
@@ -448,7 +691,11 @@ class UnixInstaller:
             message=(
                 "installed and enabled; service is intentionally inactive pending enrollment"
                 if not credential_exists
-                else "installed; credential present and service restart requested"
+                else (
+                    "installed, enrolled, and service start requested"
+                    if registration_file is not None and service_started
+                    else "installed; existing credential preserved and service restart requested"
+                )
             ),
         )
 
@@ -545,6 +792,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=Path("/"), help=argparse.SUPPRESS)
     parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--registration-file",
+        type=Path,
+        help="protected Central registration JSON used for one-time Enrollment",
+    )
     subparsers = parser.add_subparsers(dest="action", required=False)
     subparsers.add_parser("install")
     preflight = subparsers.add_parser("preflight")
@@ -564,7 +816,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             test_mode=args.test_mode,
         )
         if action == "install":
-            result = installer.install()
+            result = installer.install(registration_file=args.registration_file)
         elif action == "preflight":
             result = installer.preflight(network=args.network)
         else:

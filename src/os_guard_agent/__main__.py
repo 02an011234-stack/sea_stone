@@ -20,6 +20,7 @@ from .registration import (
     load_registration_file,
     validate_enrollment_runtime,
 )
+from .token_store import TokenStoreError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -93,6 +94,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except ApiClientError as exc:
         print(f"Agent API error: {exc}", file=sys.stderr)
+        return 1
+    except TokenStoreError:
+        print(
+            "Credential storage error: operating credential was not stored",
+            file=sys.stderr,
+        )
         return 1
     except OSError as exc:
         print(f"Agent startup error: {exc}", file=sys.stderr)

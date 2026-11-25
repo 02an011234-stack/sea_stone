@@ -89,19 +89,27 @@ def validate_enrollment_runtime(credential_path: Path) -> None:
         ) from None
 
 
-def load_registration_file(path: Path, expected_url: str) -> RegistrationFile:
+def load_registration_file(
+    path: Path,
+    expected_url: str | None,
+    *,
+    allowed_owner_uids: set[int] | None = None,
+) -> RegistrationFile:
     try:
         if path.is_symlink():
             raise RegistrationFileError("registration file must not be a symlink")
         if not path.is_file():
             raise RegistrationFileError("registration file is not a regular file")
+        metadata = path.stat()
+        if metadata.st_size > 64 * 1024:
+            raise RegistrationFileError("registration file is too large")
         if os.name == "posix":
-            metadata = path.stat()
             if metadata.st_mode & 0o077:
                 raise RegistrationFileError("registration file permissions are too broad")
-            if metadata.st_uid != os.geteuid():
+            accepted_owners = allowed_owner_uids or {os.geteuid()}
+            if metadata.st_uid not in accepted_owners:
                 raise RegistrationFileError(
-                    "registration file must be owned by the Enrollment account"
+                    "registration file owner is not permitted"
                 )
         payload = json.loads(path.read_text(encoding="utf-8"))
     except RegistrationFileError:
@@ -134,7 +142,10 @@ def load_registration_file(path: Path, expected_url: str) -> RegistrationFile:
         raise RegistrationFileError("registration file is not for a Unix Agent")
     if registration.enrollment_header != "X-Enrollment-Token":
         raise RegistrationFileError("unsupported enrollment header")
-    if registration.central_server_url != expected_url.rstrip("/"):
+    if (
+        expected_url is not None
+        and registration.central_server_url != expected_url.rstrip("/")
+    ):
         raise RegistrationFileError("registration Central URL does not match configuration")
     fingerprint = registration.ca_sha256_fingerprint
     if len(fingerprint) != 64 or any(char not in "0123456789abcdef" for char in fingerprint):

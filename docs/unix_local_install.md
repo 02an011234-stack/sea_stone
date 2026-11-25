@@ -1,8 +1,8 @@
 # OS Guard Unix local installation foundation
 
-Status: local installation only. Central installation Reporter, signed package
-verification, CA bootstrap, automatic Enrollment, and privileged CHECK Helper
-are not enabled by this implementation.
+Status: local installation and protected registration-file Enrollment. Central
+installation Reporter, signed package verification, CA bootstrap, and the
+privileged CHECK Helper are not enabled by this implementation.
 
 ## Local install
 
@@ -21,15 +21,60 @@ state/log paths, installs the hardened systemd unit, and runs local Preflight.
 The service is enabled immediately. It is started only when a protected,
 reloadable operating credential already exists. On a first installation the
 result therefore reports `enrollment_required=true`; automatic delivery of the
-Central registration session is intentionally deferred until the common
-bootstrap contract is approved.
+Central registration can be performed in the same administrator operation:
 
-Official Enrollment must be launched as the `osguard` service identity. The
-registration file must be owned by that identity and restricted to mode 0600;
-root-run Enrollment is rejected instead of creating a root-owned operating
-credential. The credential directory remains `osguard:osguard` mode 0700 and
-the credential file is written atomically with mode 0600. Existing credentials
-are validated and preserved rather than recursively changing ownership.
+```sh
+sudo ./install.sh --registration-file /protected/path/registration.json
+```
+
+The currently implemented registration schema is:
+
+```json
+{
+  "schema_version": "2.0",
+  "family": "UNIX",
+  "enrollment_id": "enrollment-example",
+  "token": "example-one-time-token",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "server_id": "server-example",
+  "central_server_url": "https://central.example/agent-api/v2",
+  "ca_sha256_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "enrollment_header": "X-Enrollment-Token"
+}
+```
+
+The file must be a regular, non-symlink file no larger than 64 KiB, owned by
+root or the sudo-invoking user, with no group/other access. Values above are
+illustrative and are not valid credentials.
+
+The installer validates the registration document before changing product
+files, configures a fresh Agent configuration with its HTTPS Central URL, and
+stages a mode-0600 copy for the `osguard` identity. It invokes the existing
+Enrollment CLI through `runuser`; the Enrollment Token is never placed in an
+argument. The service starts only after the resulting operating credential is
+atomically stored and reloaded. On success the original registration file is
+unlinked. On authentication, network, response-loss, or credential-storage
+failure it is retained for explicit recovery and is not retried automatically.
+
+The installer input must be owned by root or the invoking sudo user and must
+not grant group/other permissions. Direct Enrollment must still be launched as
+the `osguard` identity with an `osguard`-owned mode-0600 file. The credential
+directory remains `osguard:osguard` mode 0700 and the credential file is
+written atomically with mode 0600. Existing credentials are validated and
+preserved; supplying a registration file does not overwrite or consume them.
+
+The installed Agent runs from `/opt/os-guard-agent/.venv`. Installation is
+network-free: the virtual environment uses approved host Python packages and a
+fixed `.pth` entry for the root-owned Agent source. Production packaging still
+needs a signed package dependency baseline or wheelhouse for fully isolated
+third-party dependencies; the installer never downloads packages from an
+external index.
+
+The HTTP client uses the system CA trust store, requires certificate chain and
+hostname verification, and has no `verify=false` path. The registration
+`ca_sha256_fingerprint` is validated syntactically but is not used for CA
+bootstrap or pinning because Central has not yet defined whether it identifies
+the issuing CA or leaf certificate, nor its rotation contract.
 
 ### Payload scope limitation
 
