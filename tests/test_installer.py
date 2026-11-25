@@ -4,17 +4,22 @@ import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import os_guard_agent.installer as installer_module
 from os_guard_agent.installer import InstallError, UnixInstaller, _parser
 from os_guard_agent.models import OperatingCredential
 from os_guard_agent.token_store import TokenStore
 
 
 ROOT = Path(__file__).parents[1]
+CURRENT_UID = getattr(os, "geteuid", lambda: 0)()
 
 
 def write_registration(
@@ -47,6 +52,16 @@ def prepare_root(tmp_path: Path, distro: str = "ubuntu", version: str = "24.04")
     return root
 
 
+def registration_fixture_installer(root: Path, **kwargs) -> UnixInstaller:
+    return UnixInstaller(
+        ROOT,
+        root=root,
+        test_mode=True,
+        fixture_registration_owner_uids={CURRENT_UID},
+        **kwargs,
+    )
+
+
 @pytest.mark.parametrize(
     ("distro", "version"),
     (("ubuntu", "22.04"), ("ubuntu", "24.04"), ("rocky", "9.6"), ("rocky", "10.2")),
@@ -75,6 +90,39 @@ def test_installer_builds_local_service_layout(tmp_path, distro, version):
     assert (root / "var/lib/os-guard-agent/outbox").is_dir()
     assert (root / "var/log/os-guard-agent").is_dir()
     assert not (root / "usr/libexec/os-guard-check-helper").exists()
+
+
+def test_system_site_virtual_environment_can_import_cryptography_without_download(
+    tmp_path,
+):
+    virtual_environment = tmp_path / "venv"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "venv",
+            "--system-site-packages",
+            str(virtual_environment),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    python_path = (
+        virtual_environment / "Scripts/python.exe"
+        if os.name == "nt"
+        else virtual_environment / "bin/python"
+    )
+    completed = subprocess.run(
+        [str(python_path), "-c", "import cryptography"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_systemd_unit_runs_as_unprivileged_account_and_is_sandboxed():
@@ -363,10 +411,8 @@ def test_install_enrolls_as_osguard_then_starts_service(tmp_path):
                 )
             )
 
-    result = UnixInstaller(
-        ROOT,
-        root=root,
-        test_mode=True,
+    result = registration_fixture_installer(
+        root,
         command_runner=command_runner,
     ).install(registration_file=registration_path)
 
@@ -397,10 +443,8 @@ def test_enrollment_failure_retains_registration_and_does_not_start_service(
         if "enroll" in argv:
             raise InstallError(f"fixture {failure_kind}")
 
-    result = UnixInstaller(
-        ROOT,
-        root=root,
-        test_mode=True,
+    result = registration_fixture_installer(
+        root,
         command_runner=command_runner,
     ).install(registration_file=registration_path)
 
@@ -421,10 +465,8 @@ def test_credential_storage_failure_is_reported_without_consuming_registration(
     registration_path = tmp_path / "registration.json"
     write_registration(registration_path)
 
-    result = UnixInstaller(
-        ROOT,
-        root=root,
-        test_mode=True,
+    result = registration_fixture_installer(
+        root,
         command_runner=lambda _argv: None,
     ).install(registration_file=registration_path)
 
@@ -454,10 +496,8 @@ def test_service_activation_failure_preserves_credential_after_registration_cons
                 )
             )
 
-    installer = UnixInstaller(
-        ROOT,
-        root=root,
-        test_mode=True,
+    installer = registration_fixture_installer(
+        root,
         command_runner=command_runner,
     )
     monkeypatch.setattr(
@@ -492,10 +532,8 @@ def test_existing_credential_prevents_duplicate_enrollment_and_preserves_input(t
     )
     observed_commands = []
 
-    result = UnixInstaller(
-        ROOT,
-        root=root,
-        test_mode=True,
+    result = registration_fixture_installer(
+        root,
         command_runner=lambda argv: observed_commands.append(tuple(argv)),
     ).install(registration_file=registration_path)
 
@@ -514,7 +552,7 @@ def test_invalid_registration_is_rejected_before_product_install(tmp_path, conte
     registration_path.chmod(0o600)
 
     with pytest.raises(InstallError, match="registration file rejected"):
-        UnixInstaller(ROOT, root=root, test_mode=True).install(
+        registration_fixture_installer(root).install(
             registration_file=registration_path
         )
 
@@ -524,7 +562,102 @@ def test_invalid_registration_is_rejected_before_product_install(tmp_path, conte
 def test_missing_registration_is_rejected_before_product_install(tmp_path):
     root = prepare_root(tmp_path)
     with pytest.raises(InstallError, match="registration file rejected"):
-        UnixInstaller(ROOT, root=root, test_mode=True).install(
+        registration_fixture_installer(root).install(
             registration_file=tmp_path / "missing.json"
         )
     assert not (root / "opt/os-guard-agent").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file ownership is required")
+def test_fixture_registration_owner_must_be_explicitly_allowed(tmp_path):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+
+    with pytest.raises(InstallError, match="owner is not permitted"):
+        UnixInstaller(
+            ROOT,
+            root=root,
+            test_mode=True,
+            fixture_registration_owner_uids=set(),
+        ).install(
+            registration_file=registration_path
+        )
+
+
+def test_fixture_owner_injection_is_rejected_outside_test_mode():
+    with pytest.raises(InstallError, match="only in explicit test mode"):
+        UnixInstaller(ROOT, fixture_registration_owner_uids={CURRENT_UID})
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX sudo identity is required")
+def test_operational_sudo_owner_requires_matching_root_invocation(
+    tmp_path,
+    monkeypatch,
+):
+    root = prepare_root(tmp_path)
+    installer = UnixInstaller(ROOT, root=root, test_mode=True)
+    monkeypatch.setattr(installer_module.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", "1001")
+    monkeypatch.setenv("SUDO_USER", "fixture-user")
+    monkeypatch.setattr(
+        installer_module,
+        "pwd",
+        SimpleNamespace(
+            getpwnam=lambda _name: SimpleNamespace(pw_uid=1001),
+        ),
+    )
+
+    assert installer._registration_owner_uids() == {0, 1001}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX sudo identity is required")
+def test_operational_sudo_uid_without_matching_user_is_ignored(tmp_path, monkeypatch):
+    root = prepare_root(tmp_path)
+    installer = UnixInstaller(ROOT, root=root, test_mode=True)
+    monkeypatch.setattr(installer_module.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", "1001")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+
+    assert installer._registration_owner_uids() == {0}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes are required")
+def test_registration_file_with_group_access_is_rejected(tmp_path):
+    root = prepare_root(tmp_path)
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+    registration_path.chmod(0o640)
+
+    with pytest.raises(InstallError, match="permissions are too broad"):
+        registration_fixture_installer(root).install(
+            registration_file=registration_path
+        )
+
+
+def test_registration_symlink_is_rejected(tmp_path):
+    root = prepare_root(tmp_path)
+    target = tmp_path / "registration-target.json"
+    link = tmp_path / "registration.json"
+    write_registration(target)
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(InstallError, match="symbolic links"):
+        registration_fixture_installer(root).install(registration_file=link)
+
+
+def test_registration_path_traversal_is_rejected(tmp_path):
+    root = prepare_root(tmp_path)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    registration_path = tmp_path / "registration.json"
+    write_registration(registration_path)
+    traversal_path = nested / ".." / "registration.json"
+
+    with pytest.raises(InstallError, match="path traversal"):
+        registration_fixture_installer(root).install(
+            registration_file=traversal_path
+        )

@@ -35,6 +35,19 @@ class RegistrationFile:
     enrollment_header: str
 
 
+def _reject_unsafe_registration_path(path: Path) -> None:
+    if ".." in path.parts:
+        raise RegistrationFileError("registration file path traversal is not permitted")
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current = current / component
+        if current.is_symlink():
+            raise RegistrationFileError(
+                "registration file path must not contain symbolic links"
+            )
+
+
 def validate_enrollment_runtime(credential_path: Path) -> None:
     """Require installed Enrollment to run as the dedicated service identity."""
 
@@ -96,8 +109,7 @@ def load_registration_file(
     allowed_owner_uids: set[int] | None = None,
 ) -> RegistrationFile:
     try:
-        if path.is_symlink():
-            raise RegistrationFileError("registration file must not be a symlink")
+        _reject_unsafe_registration_path(path)
         if not path.is_file():
             raise RegistrationFileError("registration file is not a regular file")
         metadata = path.stat()
@@ -106,7 +118,11 @@ def load_registration_file(
         if os.name == "posix":
             if metadata.st_mode & 0o077:
                 raise RegistrationFileError("registration file permissions are too broad")
-            accepted_owners = allowed_owner_uids or {os.geteuid()}
+            accepted_owners = (
+                {os.geteuid()}
+                if allowed_owner_uids is None
+                else allowed_owner_uids
+            )
             if metadata.st_uid not in accepted_owners:
                 raise RegistrationFileError(
                     "registration file owner is not permitted"
@@ -163,8 +179,7 @@ def dispose_registration_file(path: Path) -> None:
     """Unlink the consumed file; secure overwrite is not promised by filesystems."""
 
     try:
-        if path.is_symlink():
-            raise RegistrationFileError("registration file must not be a symlink")
+        _reject_unsafe_registration_path(path)
         path.unlink()
     except RegistrationFileError:
         raise

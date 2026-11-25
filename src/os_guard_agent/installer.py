@@ -95,6 +95,7 @@ class UnixInstaller:
         *,
         root: Path = Path("/"),
         test_mode: bool = False,
+        fixture_registration_owner_uids: set[int] | None = None,
         command_runner: CommandRunner = _run_command,
         diagnostic_runner: Callable[[Sequence[str]], dict[str, object]] = _run_command_json,
     ) -> None:
@@ -102,12 +103,21 @@ class UnixInstaller:
         self.root = root.resolve()
         self.live_root = self.root == Path("/").resolve()
         self.test_mode = test_mode
+        self.fixture_registration_owner_uids = (
+            frozenset(fixture_registration_owner_uids)
+            if fixture_registration_owner_uids is not None
+            else None
+        )
         self.command_runner = command_runner
         self.diagnostic_runner = diagnostic_runner
         if self.live_root and test_mode:
             raise InstallError("test mode cannot target the live filesystem")
         if not self.live_root and not test_mode:
             raise InstallError("an alternate root is allowed only in explicit test mode")
+        if self.fixture_registration_owner_uids is not None and not test_mode:
+            raise InstallError(
+                "fixture registration owners are allowed only in explicit test mode"
+            )
 
     def _path(self, absolute: str) -> Path:
         if not absolute.startswith("/"):
@@ -458,12 +468,24 @@ class UnixInstaller:
         self.command_runner(("/usr/bin/systemctl", "enable", UNIT_NAME))
         return True, False
 
-    @staticmethod
-    def _registration_owner_uids() -> set[int]:
+    def _registration_owner_uids(self) -> set[int]:
+        if self.fixture_registration_owner_uids is not None:
+            return set(self.fixture_registration_owner_uids)
+
         owners = {0}
+        if os.name != "posix" or os.geteuid() != 0:
+            return owners
+
         sudo_uid = os.environ.get("SUDO_UID", "")
-        if sudo_uid.isdecimal():
-            owners.add(int(sudo_uid))
+        sudo_user = os.environ.get("SUDO_USER", "")
+        if sudo_uid.isdecimal() and sudo_user and pwd is not None:
+            try:
+                sudo_account = pwd.getpwnam(sudo_user)
+            except KeyError:
+                return owners
+            numeric_uid = int(sudo_uid)
+            if numeric_uid != 0 and sudo_account.pw_uid == numeric_uid:
+                owners.add(numeric_uid)
         return owners
 
     def _load_install_registration(self, path: Path) -> RegistrationFile:
